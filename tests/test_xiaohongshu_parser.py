@@ -47,16 +47,59 @@ class XiaohongshuParserTest(unittest.TestCase):
         watermarked_url = "http://sns-webpic-qc.xhscdn.com/202609102130/94e7f036b6363190c6e37270adc2b04f/1040g008324p66r2m7k705p3a1qinu9068tutcco!h5_1080jpg"
         self.assertEqual(parser._clean_image_url(watermarked_url), "https://sns-img-qc.xhscdn.com/1040g008324p66r2m7k705p3a1qinu9068tutcco?imageView2/2/w/1920/format/jpg")
 
-    def test_get_real_video_url_unwatermarked(self):
+    def test_get_real_video_url_priority_chain(self):
         parser = XiaohongshuParser.__new__(XiaohongshuParser)
-        # Test prioritizing consumer.originVideoKey
+
+        # 回归：consumer.originVideoKey 存在时也必须返回转码流（video/mp4、约 18MB），
+        # 不得再返回 originVideoKey 拼出的原画母带（application/octet-stream、283MB，下游播放器与小程序常拒收）
+        parser.note_data = {
+            "video": {
+                "consumer": {"originVideoKey": "pre_post/1040g2t0324k7p9o3go005q1il9f2nou295lutc0"},
+                "media": {
+                    "stream": {
+                        "h264": [{"streamType": 259, "streamDesc": "MINI_APP_259", "masterUrl": "http://sns-video-v4.xhscdn.com/stream/79/110/259/aaa_259.mp4?sign=abc"}],
+                        "h265": [{"streamType": 309, "streamDesc": "X265_MP4_WEB_309_h5", "masterUrl": "http://sns-video-v4.xhscdn.com/stream/79/110/309/bbb_309.mp4?sign=def"}],
+                    }
+                },
+            }
+        }
+        # 实测（笔记 6a915c1d000000000502a077）：streamType 259(MINI_APP_259) 带水印，
+        # 309(X265_MP4_WEB_309_h5) 无水印，因此两者并存时必须选 309，不能按 h264 优先挑到 259
+        self.assertEqual(parser.get_real_video_url(), "https://sns-video-v4.xhscdn.com/stream/79/110/309/bbb_309.mp4?sign=def")
+
+        # 同一档位内仍保持 h264 优先（兼容性更好）：258 与 309 同为无水印时选 258
+        parser.note_data = {
+            "video": {
+                "media": {
+                    "stream": {
+                        "h264": [{"streamType": 258, "streamDesc": "X264_MP4", "masterUrl": "http://sns-video-v2.xhscdn.com/stream/clean_258.mp4"}],
+                        "h265": [{"streamType": 309, "streamDesc": "X265_MP4_WEB_309_h5", "masterUrl": "http://sns-video-v4.xhscdn.com/stream/clean_309.mp4"}],
+                    }
+                }
+            }
+        }
+        self.assertEqual(parser.get_real_video_url(), "https://sns-video-v2.xhscdn.com/stream/clean_258.mp4")
+
+        # 仅有带水印的 259 时退而求其次选它，而不是回退到 283MB 母带
+        parser.note_data = {
+            "video": {
+                "media": {
+                    "stream": {
+                        "h264": [{"streamType": 259, "streamDesc": "MINI_APP_259", "masterUrl": "http://sns-video-v4.xhscdn.com/stream/only_259.mp4"}],
+                    }
+                }
+            }
+        }
+        self.assertEqual(parser.get_real_video_url(), "https://sns-video-v4.xhscdn.com/stream/only_259.mp4")
+
+        # mediaV2 提供无水印 screencast 流时仍优先，保留去水印能力
         parser.note_data = {
             "video": {
                 "consumer": {"originVideoKey": "pre_post/1040g2t0324k7p9o3go005q1il9f2nou295lutc0"},
                 "mediaV2": '{"video": {"opaque1": {"hd_screencast_stream": "http://sns-video-v2.xhscdn.com/stream/1/110/301/hd_clean.mp4"}}}',
             }
         }
-        self.assertEqual(parser.get_real_video_url(), "https://sns-video-bd.xhscdn.com/pre_post/1040g2t0324k7p9o3go005q1il9f2nou295lutc0")
+        self.assertEqual(parser.get_real_video_url(), "https://sns-video-v2.xhscdn.com/stream/1/110/301/hd_clean.mp4")
 
         # Test prioritizing mediaV2 screencast stream when originVideoKey is absent
         parser.note_data = {

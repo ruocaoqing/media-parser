@@ -174,21 +174,11 @@ class XiaohongshuParser(BaseParser):
             if not isinstance(video_info, dict):
                 return None
 
-            # 1. 优先提取 consumer 中的 originVideoKey（无水印原画视频 Key）
-            consumer = video_info.get('consumer', {})
-            origin_key = None
-            if isinstance(consumer, dict):
-                origin_key = consumer.get('originVideoKey') or consumer.get('origin_video_key')
-            if not origin_key:
-                origin_key = video_info.get('originVideoKey') or video_info.get('origin_video_key')
+            # 注意：不要用 consumer.originVideoKey 拼 https://sns-video-bd.xhscdn.com/{key} 并提前返回。
+            # 那是未转码的原画母带（Content-Type: application/octet-stream，实测单个视频 283MB），
+            # 播放器与小程序下载常因体积和 MIME 类型拒收；转码流体积小、类型正确，故改走下方分支。
 
-            if origin_key:
-                if origin_key.startswith(('http://', 'https://')):
-                    return self._ensure_https(origin_key)
-                else:
-                    return f"https://sns-video-bd.xhscdn.com/{origin_key.lstrip('/')}"
-
-            # 2. 优先提取 mediaV2 中的 screencast 原画/高清无水印流
+            # 1. 优先提取 mediaV2 中的 screencast 原画/高清无水印流
             media_v2_str = video_info.get('mediaV2')
             if media_v2_str and isinstance(media_v2_str, str):
                 try:
@@ -212,7 +202,7 @@ class XiaohongshuParser(BaseParser):
                 except Exception as e:
                     logger.debug(f"解析 mediaV2 失败: {e}")
 
-            # 3. 检查 h264/h265/av1 中的 stream，优先使用无水印流（如 streamType 258 或 301，或 streamDesc X264_MP4）
+            # 2. 检查 h264/h265/av1 中的 stream，优先使用无水印流（如 streamType 258 / 301 / 309，或 streamDesc X264_MP4）
             stream = video_info.get('media', {}).get('stream', {}) or video_info.get('stream', {})
             unwatermarked_candidates = []
             fallback_candidates = []
@@ -231,9 +221,12 @@ class XiaohongshuParser(BaseParser):
                     stream_type = item.get('streamType')
                     stream_desc = item.get('streamDesc', '')
 
-                    if stream_type in (258, 301) or "X264_MP4" in stream_desc:
+                    # 259（MINI_APP_259）实测带水印；258 / 301 / 309 及其余类型均视为无水印。
+                    # 注意 309（X265_MP4_WEB_309_h5）无水印，不能因为它是 h265 就当作带水印兜底，
+                    # 否则 h264 优先的遍历顺序会挑到带水印的 259。
+                    if stream_type in (258, 301, 309) or "X264_MP4" in stream_desc:
                         unwatermarked_candidates.append(clean_url)
-                    elif stream_type not in (259, 309):
+                    elif stream_type != 259:
                         unwatermarked_candidates.append(clean_url)
                     else:
                         fallback_candidates.append(clean_url)
