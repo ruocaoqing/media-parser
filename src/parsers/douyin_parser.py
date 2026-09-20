@@ -17,6 +17,7 @@ from src.parsers.base_parser import BaseParser
 from src.utils.cookie_manager import get_platform_cookie
 from utils.signer.bytedance.bogus_signer import BogusSigner
 from utils.web_fetcher import UrlParser
+from src.utils.vod_dispatch import resolve_media_url
 
 logger = get_logger(__name__)
 
@@ -803,6 +804,21 @@ class DouyinParser(BaseParser):
         return url_list[0] if url_list else None
 
     def get_real_video_url(self):
+        """对外入口：原始提取结果经 VOD 摇签收口后返回（play 地址 302 派发域名不可控）。"""
+        return self._resolve_media_cached(self._get_real_video_url_raw())
+
+    def _resolve_media_cached(self, url):
+        """同一次解析内相同地址只摇一次签（video_url 与 video_list[0] 常为同一地址）。"""
+        if not url:
+            return url
+        cache = getattr(self, '_vod_resolve_cache', None)
+        if cache is None:
+            cache = self._vod_resolve_cache = {}
+        if url not in cache:
+            cache[url] = resolve_media_url(url)
+        return cache[url]
+
+    def _get_real_video_url_raw(self):
         """
         获取最高清晰度视频播放地址。
         优化策略：
@@ -899,6 +915,13 @@ class DouyinParser(BaseParser):
             return None
 
     def get_video_list(self):
+        """对外入口：分集列表仅对首个地址摇签收口（避免逐集多次上游请求）。"""
+        urls = self._get_video_list_raw()
+        if urls:
+            urls[0] = self._resolve_media_cached(urls[0])
+        return urls
+
+    def _get_video_list_raw(self):
         """获取视频列表（单视频作品返回包含主视频的列表；合集或放映厅返回所有分集视频列表）"""
         if self.is_music:
             return []
@@ -953,7 +976,7 @@ class DouyinParser(BaseParser):
                 if video_urls:
                     return video_urls
 
-        video_url = self.get_real_video_url()
+        video_url = self._get_real_video_url_raw()
         return [video_url] if video_url else []
 
     @staticmethod

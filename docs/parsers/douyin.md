@@ -192,6 +192,19 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
   1. **画质与裁剪**：`origin_cover` 是创作者选定的原始封面帧，画质最高且未经系统裁剪压缩；
   2. **兼容性与性能**：`dynamic_cover` 是带动画的 WebP 动图（通常 300KB~2MB），若直接作为缩略图会导致部分客户端/Web 控件持续循环解码闪烁，优先静态原封面可将体积压缩 80% 以上并杜绝动图闪烁。
 
+### 4.7 视频 URL 域名收敛（VOD 摇签）
+* **背景**：`url_list[2]` 优选的源站节点常为 play 网关地址（`api-play-hl.amemv.com/aweme/v1/play/...`），客户端请求时会 302 派发到**随机** CDN 节点——实测同一 play 地址 50 次派发出 29 个不同域名（含 `bdcgslb.com` / `jspcdn.cn:20443` 等无法进入小程序 downloadFile 白名单的第三方 PCDN）。且字节签名按节点绑定，对最终地址**更换主机名必返回 403**，域名无法改写、只能重取。
+* **方案**：`src/utils/vod_dispatch.py` 在服务端预先跟随 302 拿到最终 CDN 地址，**并发摇签**（每批 4 个 `Range: bytes=0-0` 轻量探测，`as_completed` 流式检查，命中白名单主机立即返回；未命中再摇下一批，累计最多 12 次）；全部未命中时退回最后一次结果（fail-open，与未开启时行为一致）。挂载于 `get_real_video_url` / `get_video_list` 对外入口，同一次解析内相同地址只摇一次（实例级缓存）。
+* **实测效果**：白名单覆盖率从 ~50% 提升至 5/5 全命中（首批命中 <1.2s），返回地址均可 206 下载。
+* **配置项**（环境变量）：
+  | 变量 | 默认 | 说明 |
+  |---|---|---|
+  | `DOUYIN_VOD_RESOLVE_ENABLED` | `true` | 摇签开关，`false`/`0` 关闭（直接返回原始地址） |
+  | `DOUYIN_VOD_ALLOWED_HOSTS` | 内置 60 节点 | 摇签白名单，逗号分隔完整主机名；需与小程序 downloadFile 合法域名清单中的字节系节点保持同步 |
+  | `DOUYIN_VOD_RESOLVE_BATCH` | `4` | 每批并发探测数 |
+  | `DOUYIN_VOD_RESOLVE_MAX_ATTEMPTS` | `12` | 累计最多探测次数 |
+* **注意**：仅 play 网关地址（`api-play-hl.amemv.com` / `aweme.snssdk.com` / `www.douyin.com` 的 `/aweme/v1/play/` 路径）参与摇签；直连 CDN 形态（`/tos/` 链接）原样返回，域名不在白名单时仅记录日志。
+
 ---
 
 ## 5. 常见踩坑记录与风控解法 (Gotchas)
