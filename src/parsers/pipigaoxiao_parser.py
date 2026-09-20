@@ -64,6 +64,33 @@ class PipigaoxiaoParser(BaseParser):
             logger.warning(f"Failed to parse Pipigaoxiao description: {e}")
             return None
 
+    def get_image_list(self):
+        """提取帖子图集；imgs 里 video=1 的是视频本身，不是配图。"""
+        try:
+            if not self.data: return []
+            imgs = self.data.get('data', {}).get('post', {}).get('imgs') or []
+
+            image_list = []
+            for img in imgs:
+                if not isinstance(img, dict) or img.get('video'):
+                    continue
+
+                # 优先原图，其次 540/360 压缩图，最后回落到按图片 ID 拼的地址
+                urls = img.get('urls') or {}
+                candidates = []
+                for key in ('origin', '540', '360'):
+                    variant = urls.get(key) or {}
+                    candidates.extend(variant.get('urls') or [])
+                url = next((u for u in candidates if u), None)
+                if not url and img.get('id'):
+                    url = f"https://file.ippzone.com/img/view/id/{img['id']}"
+                if url:
+                    image_list.append(url)
+            return image_list
+        except Exception as e:
+            logger.warning(f"Failed to parse Pipigaoxiao image list: {e}")
+            return []
+
     def get_cover_photo_url(self):
         try:
             if not self.data: return ""

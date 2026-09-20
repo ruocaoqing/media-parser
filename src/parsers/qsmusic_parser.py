@@ -30,6 +30,8 @@ class QSMusicParser(BaseParser):
         self.audio_url = None
         self.author = {"nickname": "", "author_id": "", "avatar": ""}
         self.subtitles = None
+        self.is_preview = False
+        self.full_duration = None
         self.track_id = self._extract_track_id(real_url)
         self._parse_page()
 
@@ -45,7 +47,7 @@ class QSMusicParser(BaseParser):
             logger.warning("Failed to fetch QSMusic HTML page: %s", exc)
 
         if not self.title or not (self.video_url or self.audio_url):
-            self._parse_seo_payload()
+            self._parse_track_payload()
 
     def _parse_router_data(self, html):
         match = re.search(r"_ROUTER_DATA\s*=\s*(\{.*?\});", html or "", re.DOTALL)
@@ -72,58 +74,103 @@ class QSMusicParser(BaseParser):
                             self.audio_url = self.audio_url or stream_url
                     self.subtitles = self.subtitles or self._extract_subtitles_from_dict(options)
 
+                lyrics_opt = page_data.get("audioWithLyricsOption") or {}
+                if isinstance(lyrics_opt, dict) and lyrics_opt.get("url"):
+                    self.audio_url = self.audio_url or lyrics_opt["url"]
+                    self.title = self.title or lyrics_opt.get("trackName") or ""
+                    self.author["nickname"] = self.author["nickname"] or lyrics_opt.get("artistName") or ""
+                    self.author["author_id"] = self.author["author_id"] or str(lyrics_opt.get("artistIdStr") or "")
+                    self.cover_url = self.cover_url or lyrics_opt.get("coverURL")
+                    self._apply_duration(
+                        lyrics_opt.get("duration"),
+                        lyrics_opt.get("offsetDuration") or lyrics_opt.get("duration"),
+                    )
+
                 track = page_data.get("trackOptions") or page_data.get("track") or page_data.get("seo_track") or {}
                 track = track.get("track") if isinstance(track.get("track"), dict) else track
                 if not isinstance(track, dict) or not track:
                     continue
                 self.title = self.title or track.get("name") or track.get("title") or ""
-                artist = track.get("artist") or ((track.get("artists") or [{}])[0] or {}).get("user_info") or {}
+                artist = track.get("artist") or ((track.get("artists") or [{}])[0] or {}).get("user_info") or (track.get("artists") or [{}])[0] or {}
                 if isinstance(artist, dict):
                     self.author["nickname"] = self.author["nickname"] or artist.get("nickname") or artist.get("name") or ""
                     self.author["author_id"] = self.author["author_id"] or str(artist.get("id") or artist.get("user_id") or "")
-                    self.author["avatar"] = self.author["avatar"] or self._first_url(artist.get("avatar_url")) or ""
+                    self.author["avatar"] = self.author["avatar"] or self._image_url(artist.get("avatar_url") or artist.get("url_avatar")) or ""
                 album = track.get("album") or {}
-                self.cover_url = self.cover_url or self._first_url(album.get("cover_url")) or self._first_url(track.get("cover_url"))
+                self.cover_url = self.cover_url or self._image_url(album.get("cover_url") or album.get("url_cover")) or self._image_url(track.get("cover_url"))
                 self.audio_url = self.audio_url or track.get("audio_url") or track.get("play_url") or track.get("main_url")
 
-                lyrics_opt = page_data.get("audioWithLyricsOption") or track
-                self.subtitles = self.subtitles or self._extract_subtitles_from_dict(lyrics_opt)
+                self.subtitles = self.subtitles or self._extract_subtitles_from_dict(lyrics_opt or track)
         except (json.JSONDecodeError, TypeError) as exc:
             logger.warning("Error parsing QSMusic router data: %s", exc)
 
-    def _parse_seo_payload(self):
+    def _parse_track_payload(self):
+        """走 Web 播放接口兜底。"""
         if not self.track_id:
             return
-        try:
-            response = self.session.get(
-                "https://beta-luna.douyin.com/luna/h5/seo_track",
-                params={"track_id": self.track_id, "device_platform": "web"},
-                headers={"User-Agent": self.MOBILE_UA, "X-Requested-With": "XMLHttpRequest"},
-                timeout=15,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                return
-        except Exception as exc:
-            logger.warning("Failed to fetch QSMusic SEO payload: %s", exc)
+        headers = {
+            "User-Agent": self.MOBILE_UA,
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"https://music.douyin.com/qishui/share/track?track_id={self.track_id}",
+        }
+
+        payload = None
+        for path in ("/luna/h5/track_v2", "/luna/h5/seo_track"):
+            try:
+                response = self.session.get(
+                    "https://beta-luna.douyin.com" + path,
+                    params={"track_id": self.track_id, "device_platform": "web"},
+                    headers=headers,
+                    timeout=15,
+                )
+                response.raise_for_status()
+                candidate = response.json()
+            except Exception as exc:
+                logger.warning("Failed to fetch QSMusic track payload (%s): %s", path, exc)
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if not payload:
             return
 
-        track = ((payload.get("seo_track") or {}).get("track") or {})
+        track = payload.get("track") or ((payload.get("seo_track") or {}).get("track") or {})
+        if not isinstance(track, dict):
+            track = {}
         self.title = self.title or track.get("name") or ""
-        artist = ((track.get("artists") or [{}])[0] or {}).get("user_info") or {}
-        self.author["nickname"] = self.author["nickname"] or artist.get("nickname") or ""
-        self.author["author_id"] = self.author["author_id"] or str(artist.get("id") or "")
-        self.author["avatar"] = self.author["avatar"] or self._first_url(artist.get("medium_avatar_url")) or ""
+        artist = ((track.get("artists") or [{}])[0] or {}).get("user_info") or (track.get("artists") or [{}])[0] or {}
+        if isinstance(artist, dict):
+            self.author["nickname"] = self.author["nickname"] or artist.get("nickname") or artist.get("name") or ""
+            self.author["author_id"] = self.author["author_id"] or str(artist.get("id") or artist.get("user_id") or "")
+            self.author["avatar"] = self.author["avatar"] or self._image_url(artist.get("medium_avatar_url") or artist.get("url_avatar")) or ""
         album = track.get("album") or {}
-        self.cover_url = self.cover_url or self._first_url(album.get("cover_url"))
+        self.cover_url = self.cover_url or self._image_url(album.get("cover_url") or album.get("url_cover"))
+
         player = payload.get("track_player") or {}
-        if not self.audio_url and player.get("video_model"):
-            try:
-                video = (json.loads(player["video_model"]).get("video_list") or [{}])[0]
-                self.audio_url = video.get("main_url") or video.get("backup_url")
-            except (json.JSONDecodeError, TypeError):
-                pass
+        model = self._load_video_model(player.get("video_model"))
+        if model:
+            video = (model.get("video_list") or [{}])[0] or {}
+            self.audio_url = self.audio_url or video.get("main_url") or video.get("backup_url")
+            self._apply_duration((track.get("duration") or 0) / 1000, model.get("video_duration"))
+
+    @staticmethod
+    def _load_video_model(raw):
+        if not raw:
+            return None
+        try:
+            model = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return model if isinstance(model, dict) else None
+
+    def _apply_duration(self, full_seconds, clip_seconds):
+        """比对曲目声明时长与实际下发流时长，识别汽水 VIP 试听片段。"""
+        if not isinstance(full_seconds, (int, float)) or full_seconds <= 0:
+            return
+        self.full_duration = round(float(full_seconds), 3)
+        if not isinstance(clip_seconds, (int, float)) or clip_seconds <= 0:
+            return
+        self.is_preview = clip_seconds < full_seconds - 1
 
     @staticmethod
     def _extract_track_id(url):
@@ -148,6 +195,17 @@ class QSMusicParser(BaseParser):
         if isinstance(value, dict):
             return next((value.get(key) for key in ("url", "origin_url", "large_url") if value.get(key)), None)
         return None
+
+    @classmethod
+    def _image_url(cls, value):
+        """兼容汽水图片载荷：直链、URL 列表，以及 urls[0] + uri 的模板形式。"""
+        if isinstance(value, dict) and value.get("urls"):
+            base = cls._first_url(value.get("urls"))
+            uri = value.get("uri")
+            if base and uri:
+                return base.rstrip("/") + "/" + str(uri).lstrip("/")
+            return base
+        return cls._first_url(value)
 
     def _extract_subtitles_from_dict(self, data):
         """从字典数据中提炼字幕/歌词列表。"""

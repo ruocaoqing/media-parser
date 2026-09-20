@@ -5,7 +5,7 @@ PLATFORM_COOKIE_ALIASES = {
     "xhs": ["XHS_COOKIE", "XIAOHONGSHU_COOKIE"],
     "xiaohongshu": ["XHS_COOKIE", "XIAOHONGSHU_COOKIE"],
     "pinduoduo": ["PINDUODUO_COOKIE", "PDD_COOKIE"],
-    "douyin": ["DOUYIN_COOKIE"],
+    "douyin": ["DOUYIN_COOKIE", "DY_COOKIE"],
     "yuanbao": ["YUANBAO_COOKIE"],
     "wechat_channels": ["YUANBAO_COOKIE", "WECHAT_CHANNELS_COOKIE"],
     "doubao": ["DOUBAO_COOKIE"],
@@ -30,12 +30,16 @@ def get_platform_cookie(platform_key: str, env_var: str | None = None) -> str:
     # 1. 优先读取指定环境变量
     val = os.getenv(env_var, "").strip()
     if val:
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1].strip()
         return val
 
     # 2. 检查别名列表
     for alias in PLATFORM_COOKIE_ALIASES.get(key_normalized, []):
         val = os.getenv(alias, "").strip()
         if val:
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1].strip()
             return val
 
     return ""

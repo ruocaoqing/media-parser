@@ -60,11 +60,39 @@ class WeiboParserTest(unittest.TestCase):
         }
         self.assertEqual(
             parser.get_image_list(),
-            ["https://wx1.sinaimg.cn/large/pic1.jpg", "https://wx2.sinaimg.cn/large/pic2.jpg"]
+            ["https://wx1.sinaimg.cn/osj1080/pic1.jpg", "https://wx2.sinaimg.cn/osj1080/pic2.jpg"]
         )
         self.assertIsNone(parser.get_title_content())
         self.assertEqual(parser.get_description(), "图文微博测试")
         self.assertEqual(parser.get_author_info()["nickname"], "博主昵称")
+
+    def test_live_photo_extraction(self):
+        parser = WeiboParser.__new__(WeiboParser)
+        parser.post_data = {
+            "pics": [
+                {
+                    "large": {"url": "https://wx1.sinaimg.cn/large/pic1.jpg"},
+                    "videoSrc": "https://video.weibo.com/media/play?livephoto=https%3A%2F%2Flivephoto.us.sinaimg.cn%2Fvideo1.mov",
+                    "type": "livephoto"
+                },
+                {
+                    "large": {"url": "https://wx2.sinaimg.cn/large/pic2.jpg"}
+                }
+            ]
+        }
+        self.assertEqual(
+            parser.get_image_list(),
+            [
+                {
+                    "url": "https://wx1.sinaimg.cn/osj1080/pic1.jpg",
+                    "live_photo_url": "https://video.weibo.com/media/play?livephoto=https%3A%2F%2Flivephoto.us.sinaimg.cn%2Fvideo1.mov"
+                },
+                {
+                    "url": "https://wx2.sinaimg.cn/osj1080/pic2.jpg",
+                    "live_photo_url": None
+                }
+            ]
+        )
 
     def test_video_component_fields(self):
         parser = WeiboParser.__new__(WeiboParser)
@@ -100,7 +128,7 @@ class WeiboParserTest(unittest.TestCase):
             }
         }
         self.assertEqual(parser.get_real_video_url(), "http://live.video.weibocdn.com/replay.m3u8")
-        self.assertEqual(parser.get_cover_photo_url(), "https://wx2.sinaimg.cn/large/cover.jpg")
+        self.assertEqual(parser.get_cover_photo_url(), "https://wx2.sinaimg.cn/osj1080/cover.jpg")
         self.assertEqual(parser.get_title_content(), "直播标题")
         self.assertEqual(parser.get_author_info()["nickname"], "主播昵称")
         self.assertEqual(parser.get_author_info()["author_id"], "123456")

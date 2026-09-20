@@ -303,14 +303,23 @@ class WeiboParser(BaseParser):
         content = re.sub(r'<[^>]+>', '', content)
         return content or None
 
+    @staticmethod
+    def _strip_watermark_url(url):
+        if not url or not isinstance(url, str):
+            return url
+        if url.startswith("//"):
+            url = f"https:{url}"
+        return re.sub(r'(sinaimg\.cn/)(?:mw\d+|large|bmiddle|thumbnail|thumb\d+|woriginal|orj\d+|wap\d+)(/)', r'\1osj1080\2', url)
+
     def get_cover_photo_url(self):
         try:
             cover = self.post_data.get("cover") or self.post_data.get("cover_image")
             if cover:
-                return f"https:{cover}" if cover.startswith("//") else cover
+                return self._strip_watermark_url(f"https:{cover}" if cover.startswith("//") else cover)
             page_info = self.post_data.get('page_info', {})
-            if page_info.get('page_pic') and page_info['page_pic'].get('url'):
-                return page_info['page_pic']['url']
+            if page_info and page_info.get('type') not in ('topic', 'search', 'place'):
+                if page_info.get('page_pic') and page_info['page_pic'].get('url'):
+                    return self._strip_watermark_url(page_info['page_pic']['url'])
         except:
             pass
         return None
@@ -318,9 +327,32 @@ class WeiboParser(BaseParser):
     def get_image_list(self):
         try:
             pics = self.post_data.get('pics', [])
-            return [p.get('large', {}).get('url') for p in pics if p.get('large', {}).get('url')]
+            live_photo_list = self.post_data.get('live_photo', [])
+            if pics:
+                images = []
+                has_live_photo = any(p.get('type') == 'livephoto' or p.get('videoSrc') for p in pics) or bool(live_photo_list)
+                for idx, p in enumerate(pics):
+                    img_url = self._strip_watermark_url(p.get('large', {}).get('url') or p.get('url'))
+                    if not img_url:
+                        continue
+                    if has_live_photo:
+                        live_photo_url = p.get('videoSrc')
+                        if not live_photo_url and idx < len(live_photo_list):
+                            live_photo_url = live_photo_list[idx]
+                        images.append({
+                            'url': img_url,
+                            'live_photo_url': live_photo_url or None
+                        })
+                    else:
+                        images.append(img_url)
+                if images:
+                    return images
+            pic_ids = self.post_data.get('pic_ids', [])
+            if pic_ids:
+                return [f"https://wx1.sinaimg.cn/osj1080/{pid}.jpg" for pid in pic_ids]
         except:
-            return []
+            pass
+        return []
 
     def get_author_info(self):
         try:

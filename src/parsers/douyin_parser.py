@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 import random
@@ -45,7 +46,7 @@ def _get_env_float(key, default):
         return default
 
 
-API_MAX_ATTEMPTS = max(1, _get_env_int("DOUYIN_API_MAX_ATTEMPTS", 8))
+API_MAX_ATTEMPTS = max(1, _get_env_int("DOUYIN_API_MAX_ATTEMPTS", 2))
 # 请求过密会额外触发速率型拦截，重试之间使用紧凑的指数退避 + 随机抖动（单次上限 0.8s，避免图文重试总耗时过长）。
 RETRY_BASE_DELAY = _get_env_float("DOUYIN_RETRY_BASE_DELAY", 0.2)
 RETRY_MAX_DELAY = _get_env_float("DOUYIN_RETRY_MAX_DELAY", 0.8)
@@ -125,6 +126,9 @@ class DouyinParser(BaseParser):
         headers = copy.deepcopy(self.headers)
         ttwid = self._get_ttwid()
         headers['Cookie'] = self._get_cookie_header(ttwid)
+        uifid = self._get_uifid()
+        if uifid:
+            headers['uifid'] = uifid
         if use_mobile_ua:
             # 与站点旧 VideoService 一致：分享页对移动 UA 更友好
             headers['User-Agent'] = (
@@ -159,9 +163,12 @@ class DouyinParser(BaseParser):
                 if '=' not in item:
                     continue
                 k, v = item.split('=', 1)
-                k = k.strip()
-                v = v.strip()
+                k = k.strip().strip("'\"")
+                v = v.strip().strip("'\"")
                 if k in ('__ac_nonce', '__ac_signature'):
+                    continue
+                # 过滤触发 SecSDK 强校验的动态票据与防护指纹，防止 Argus 网关因缺少客户端动态签名报 403 Signature Not Found
+                if k.startswith(('bd_ticket_guard', '__security', 'fpk')) or k in ('_bd_ticket_crypt_cookie', 'x_tt_token', 'sdk_source_info'):
                     continue
                 # verify_ 开头的临时验证码通行证仅在放映厅 lvdetail 中使用，常规作品携带过期验证码会导致 403
                 if k == 's_v_web_id' and v.startswith('verify_') and not getattr(self, 'is_lvdetail', False):
@@ -184,6 +191,80 @@ class DouyinParser(BaseParser):
                 parts.append(f"{name}={value}")
                 seen.add(name)
         return '; '.join(parts)
+
+    def _get_uifid(self):
+        """
+        获取 UIFID 字段，用于计算 x-secsdk-web-signature 及作为独立 HTTP 请求头 (uifid: <value>) 发送给 Argus 网关。
+        支持场景：
+        1. 独立环境变量 DOUYIN_UIFID / DY_UIFID
+        2. 从 Cookie 字符串中解析 UIFID=...
+        3. 用户直接将 256 位 uifid 字符串传入 DOUYIN_COOKIE (无 = 号，长度 >= 32)
+        4. 从 session.cookies 中提取
+        """
+        # 1. 优先读取独立环境变量
+        for env_key in ("DOUYIN_UIFID", "DY_UIFID"):
+            env_val = os.getenv(env_key, "").strip().strip("'\"")
+            if env_val:
+                return env_val
+
+        # 2. 从 self.cookie 中解析
+        if self.cookie:
+            raw_cookie = self.cookie.strip().strip("'\"")
+            # 若用户直接把 uifid 填入 DOUYIN_COOKIE（纯 hash/token 字符串）
+            if '=' not in raw_cookie and len(raw_cookie) >= 32:
+                return raw_cookie
+
+            for item in self.cookie.split(';'):
+                if '=' not in item:
+                    continue
+                k, v = item.split('=', 1)
+                if k.strip().strip("'\"").upper() == 'UIFID' and v.strip().strip("'\""):
+                    return v.strip().strip("'\"")
+
+        # 3. 从 session.cookies 提取
+        value = next((c.value for c in self.session.cookies
+                      if c.name.upper() == 'UIFID' and not c.is_expired()
+                      and c.domain in ('', 'douyin.com', '.douyin.com', 'www.douyin.com')), None)
+        return value or ""
+
+    @staticmethod
+    def _sign_secsdk(url: str, uifid: str, ts: int | None = None) -> str:
+        """
+        为抖音核心 Web 接口规范化 query 并计算 x-secsdk-web-signature。
+        击穿 IDC 机房 IP 下 ArgusSecurityPlugin 报 Signature Not Found (403) 门禁。
+        明文结构：{uifid}_{timestamp}_{CONST}_{canonical_query}
+        """
+        if not uifid:
+            return url
+        if ts is None:
+            ts = int(time.time())
+
+        base, _, query = url.partition('?')
+        safe_chars = "!*'()"
+        parts = []
+        for pair in query.split('&'):
+            if not pair:
+                continue
+            if '=' in pair:
+                k, v = pair.split('=', 1)
+            else:
+                k, v = pair, ''
+            k = urllib.parse.unquote_plus(k, encoding='utf-8', errors='replace')
+            v = urllib.parse.unquote_plus(v, encoding='utf-8', errors='replace')
+            encoded_val = urllib.parse.quote(str(v), safe=safe_chars, encoding='utf-8')
+            parts.append(f"{k}={encoded_val}")
+        canon = '&'.join(parts)
+
+        names = [p.split('=', 1)[0] for p in canon.split('&') if p]
+        if 'uifid' not in names:
+            encoded_uifid = urllib.parse.quote(str(uifid), safe=safe_chars, encoding='utf-8')
+            canon = f"{canon}&uifid={encoded_uifid}" if canon else f"uifid={encoded_uifid}"
+
+        signed_query = f"{canon}&timestamp={ts}"
+        websign_const = "A96D855A08C0A9707F8BEF0D9A527E4E"
+        plain = f"{uifid}_{ts}_{websign_const}_{signed_query}"
+        signature = hashlib.md5(plain.encode('utf-8')).hexdigest()
+        return f"{base}?{signed_query}&x-secsdk-web-signature={signature}"
 
     def _get_ttwid(self):
         """
@@ -267,6 +348,9 @@ class DouyinParser(BaseParser):
             headers = copy.deepcopy(self.headers)
             headers['Referer'] = referer
             headers['Cookie'] = self._get_cookie_header(ttwid)
+            uifid = self._get_uifid()
+            if uifid:
+                headers['uifid'] = uifid
 
             api_url = f"{base_api}&msToken={self.signer.get_ms_token()}"
             try:
@@ -274,6 +358,9 @@ class DouyinParser(BaseParser):
             except Exception as e:
                 logger.warning(f"生成 a_bogus 签名异常: {e}")
                 return None
+
+            if uifid:
+                api_url = self._sign_secsdk(api_url, uifid)
 
             try:
                 response = self.session.get(api_url, headers=headers, verify=False, timeout=8)
@@ -292,6 +379,13 @@ class DouyinParser(BaseParser):
                         self._terminal_filter_detail = data.get('filter_detail') or {"filter_reason": filter_reason, "detail_msg": filter_msg}
                         self.terminal_error = self._terminal_filter_detail
                         return None
+                elif last_status != 200:
+                    abort_data = response.headers.get("X-Whale-Throughput-Abort-Data")
+                    abort_info = f", abort={abort_data}" if abort_data else ""
+                    logger.warning(
+                        f"抖音 Web 接口响应异常 (attempt {attempt + 1}/{attempts}, status={last_status}{abort_info}): "
+                        f"{response.text[:200]}"
+                    )
             except Exception as e:
                 logger.debug(f"请求抖音接口异常 (第 {attempt + 1}/{attempts} 次): {e}")
 
@@ -788,20 +882,46 @@ class DouyinParser(BaseParser):
         return None
 
     @staticmethod
+    def _build_play_endpoint_url(video_id: str, ratio: str = "1080p") -> str:
+        """从 video_id 或 uri 构造 iesdouyin 播放/下载端点（无水印、指定清晰度）"""
+        if not video_id:
+            return ""
+        vid_str = str(video_id).strip()
+        if not vid_str or vid_str.lower().startswith("http") or "mp3" in vid_str.lower():
+            return vid_str
+        encoded_vid = urllib.parse.quote(vid_str)
+        encoded_ratio = urllib.parse.quote(str(ratio).strip() if ratio else "default")
+        return (
+            f"https://www.iesdouyin.com/aweme/v1/play/"
+            f"?video_id={encoded_vid}&ratio={encoded_ratio}&line=0"
+            f"&is_play_url=1&watermark=0&source=PackSourceEnum_PUBLISH"
+        )
+
+    @staticmethod
     def _extract_best_url_from_play_addr(play_addr_dict):
         """
         从 play_addr 字典中提取最佳播放链接。
         play_addr_list 结构通常为：[主CDN节点, 备用CDN节点, 抖音官方源站URL]
         优先取源站 URL（如列表中有 3 个或更多元素，取 index 2），否则取第 1 个。
+        若 url_list 缺失但存在 uri，则自动格式化为 iesdouyin 播放端点。
         """
         if not play_addr_dict or not isinstance(play_addr_dict, dict):
             return None
-        url_list = play_addr_dict.get('url_list') or []
-        if not url_list:
-            return None
-        if len(url_list) >= 3 and url_list[2]:
-            return url_list[2]
-        return url_list[0] if url_list else None
+        url_list = play_addr_dict.get('url_list') or play_addr_dict.get('download_url_list') or []
+        if isinstance(url_list, list) and url_list:
+            valid_urls = [u for u in url_list if isinstance(u, str) and u.strip()]
+            if len(valid_urls) >= 3 and valid_urls[2]:
+                return valid_urls[2]
+            if valid_urls:
+                return valid_urls[0]
+        uri = play_addr_dict.get('uri')
+        if uri and isinstance(uri, str):
+            clean_uri = uri.strip()
+            if clean_uri.startswith('http'):
+                return clean_uri
+            if 'mp3' not in clean_uri.lower():
+                return DouyinParser._build_play_endpoint_url(clean_uri, ratio="1080p")
+        return None
 
     def get_real_video_url(self):
         """对外入口：原始提取结果经 VOD 摇签收口后返回（play 地址 302 派发域名不可控）。"""
@@ -856,7 +976,7 @@ class DouyinParser(BaseParser):
             if (images or media_type == 2) and not bit_rate_list:
                 return None
 
-            # 2. 尝试从 bit_rate 列表中选择最佳流
+            # 2. 尝试从 bit_rate 列表中选择最佳流（优先 H.264，按 分辨率 > 码率 > 大小 > 质量类型 综合仲裁）
             valid_streams = []
             for item in bit_rate_list:
                 if not isinstance(item, dict):
@@ -866,23 +986,33 @@ class DouyinParser(BaseParser):
                 if url:
                     rate = item.get('bit_rate') or 0
                     is_h265 = item.get('is_h265', 0)
+                    p_addr = play_addr if isinstance(play_addr, dict) else {}
+                    width = int(p_addr.get('width') or item.get('width') or 0)
+                    height = int(p_addr.get('height') or item.get('height') or 0)
+                    data_size = int(p_addr.get('data_size') or item.get('data_size') or 0)
+                    quality_type = int(item.get('quality_type') or p_addr.get('quality_type') or 0)
                     valid_streams.append({
                         'bit_rate': rate,
                         'is_h265': is_h265,
+                        'width': width,
+                        'height': height,
+                        'pixels': width * height,
+                        'data_size': data_size,
+                        'quality_type': quality_type,
+                        'is_direct': 0 if '/aweme/v1/play/' in url else 1,
                         'url': url
                     })
 
             if valid_streams:
-                # 优先筛选 H.264 流
+                # 优先筛选 H.264 流 (兼容性最好)
                 h264_streams = [s for s in valid_streams if not s.get('is_h265')]
-                if h264_streams:
-                    # 按码率降序，选最高画质
-                    h264_streams.sort(key=lambda s: s['bit_rate'], reverse=True)
-                    return h264_streams[0]['url']
-
-                # 若仅有 H.265，则按码率降序选最高画质
-                valid_streams.sort(key=lambda s: s['bit_rate'], reverse=True)
-                return valid_streams[0]['url']
+                target_pool = h264_streams if h264_streams else valid_streams
+                # 多维度仲裁排序：像素数 -> 码率 -> 文件大小 -> 质量类型 -> 直链优先级
+                target_pool.sort(
+                    key=lambda s: (s['pixels'], s['bit_rate'], s['data_size'], s['quality_type'], s['is_direct']),
+                    reverse=True
+                )
+                return target_pool[0]['url']
 
             # 2.5 检查 videoModel.dynamicVideo / playApi (长视频 / 放映厅流)
             dynamic_video = (video.get('videoModel') or {}).get('dynamicVideo') or (video.get('video_model') or {}).get('dynamic_video') or {}
@@ -898,6 +1028,20 @@ class DouyinParser(BaseParser):
                     # 否则取最高码率
                     dyn_list.sort(key=lambda s: (s.get('video_meta') or {}).get('bitrate', 0), reverse=True)
                     return dyn_list[0].get('main_url') or dyn_list[0].get('backup_url')
+
+            # 2.8 尝试从 download_addr 提取无水印原画质端点 (ratio=default)
+            download_addr = video.get('download_addr')
+            if isinstance(download_addr, dict):
+                dl_uri = download_addr.get('uri')
+                if dl_uri and isinstance(dl_uri, str) and not dl_uri.startswith('http') and 'mp3' not in dl_uri.lower():
+                    original_url = self._build_play_endpoint_url(dl_uri, ratio='default')
+                    if original_url:
+                        return original_url
+                dl_urls = download_addr.get('url_list') or []
+                if isinstance(dl_urls, list) and dl_urls:
+                    for d_u in dl_urls:
+                        if isinstance(d_u, str) and d_u.strip():
+                            return d_u.strip()
 
             # 3. 兜底方案：从 video.play_addr / play_addr_h264 / play_addr_265 提取（严格过滤音频流）
             for fallback_key in ('play_addr_h264', 'play_addr', 'play_addr_265'):
@@ -1413,46 +1557,138 @@ class DouyinParser(BaseParser):
             return None
 
     def get_image_list(self):
+        """对外入口：实况动轨（live_photo_url）为 play 网关地址，逐个摇签收口；静态原图不派发不动。"""
+        images = self._get_image_list_raw()
+        for img in images:
+            if isinstance(img, dict) and img.get('live_photo_url'):
+                img['live_photo_url'] = self._resolve_media_cached(img['live_photo_url'])
+        return images
+
+    def _get_image_list_raw(self):
         """
-        针对 aweme_type 68 的图文笔记，提取所有高清图片链接
+        针对图文笔记 / 幻灯片 / 实况图集（Live Photo），提取所有高清图片与实况动轨。
+        兼容以下多源结构：
+        - aweme_detail.image_post_info.images (现代 Web 端新版结构)
+        - aweme_detail.image_post_info.image_list
+        - aweme_detail.images
+        - aweme_detail.image_list
+        - aweme_detail.image_infos
+        - aweme_detail.original_images
+        实况图（Live Photo）支持递归提取 video、video_play_addr、video_download_addr 及 uri 端点。
         """
         if self.is_music or self.is_lvdetail:
             return []
 
         try:
             data_dict = self.data
-            if not data_dict or 'aweme_detail' not in data_dict:
+            if not data_dict:
                 return []
 
-            # 1. 抖音图文笔记的图片存储在 images 字段中
-            images = data_dict['aweme_detail'].get('images') or []
+            detail = data_dict.get('aweme_detail') or {}
+            if not detail and self.is_collection and data_dict.get('aweme_list'):
+                detail = data_dict['aweme_list'][0]
+            if not detail:
+                detail = data_dict
+
+            # 1. 扫描所有可能的图集字段结构
+            image_post_info = detail.get('image_post_info') if isinstance(detail.get('image_post_info'), dict) else {}
+            candidates = [
+                image_post_info.get('images'),
+                image_post_info.get('image_list'),
+                detail.get('images'),
+                detail.get('image_list'),
+                detail.get('image_infos'),
+                detail.get('original_images')
+            ]
+
+            images = []
+            for candidate in candidates:
+                if candidate and isinstance(candidate, list) and len(candidate) > 0:
+                    images = candidate
+                    break
+
             if not images:
-                # 兜底：有些版本可能在 image_list 字段
-                images = data_dict['aweme_detail'].get('image_list') or []
+                return []
 
-            image_urls = []
+            image_results = []
             for img in images:
-                if not img:
+                if not img or not isinstance(img, dict):
                     continue
-                # ⚠️ 注意：download_url_list 包含带水印的图片！
-                # url_list 才是无水印的原始图片链接（已通过 f2 等主流项目验证）
-                # url_list 中最后一个元素通常是最高质量的 CDN 链接
-                urls = img.get('url_list')
 
-                if urls and isinstance(urls, list) and len(urls) > 0:
-                    # 优先取最后一个 URL（通常是最高质量的源站 CDN）
-                    img_data = urls[-1]
-                    # 检查是否有 livePhoto
-                    if 'video' in img and 'play_addr' in img['video']:
-                        live_urls = img['video']['play_addr'].get('url_list')
-                        if live_urls and isinstance(live_urls, list) and len(live_urls) > 0:
-                            img_data = {
-                                'url': img_data,
-                                'live_photo_url': live_urls[0]
-                            }
-                    image_urls.append(img_data)
+                # 2. 提取静态图片 URL（优先 url_list 无水印原图，其次 display_image/image_url/download_url）
+                img_url = None
+                raw_urls = img.get('url_list') or []
+                if isinstance(raw_urls, list) and raw_urls:
+                    valid_urls = [u for u in raw_urls if isinstance(u, str) and u.strip()]
+                    if valid_urls:
+                        # 优先取最后一个 URL（通常是最高质量的源站 CDN）
+                        img_url = valid_urls[-1]
 
-            return image_urls
+                if not img_url:
+                    for fallback_key in ('display_image', 'image_url', 'image', 'origin_cover', 'cover', 'download_url_list', 'download_url'):
+                        val = img.get(fallback_key)
+                        if isinstance(val, dict):
+                            val_urls = val.get('url_list') or []
+                            if val_urls and isinstance(val_urls, list) and val_urls:
+                                img_url = val_urls[0]
+                                break
+                        elif isinstance(val, list) and val:
+                            img_url = val[0]
+                            break
+                        elif isinstance(val, str) and val.strip():
+                            img_url = val.strip()
+                            break
+
+                # 3. 提取实况照片（Live Photo）动轨视频 URL
+                live_photo_url = None
+                live_video = img.get('video') if isinstance(img.get('video'), dict) else None
+                if not live_video:
+                    for v_key in ('video_play_addr', 'video_download_addr'):
+                        if isinstance(img.get(v_key), dict):
+                            live_video = {'play_addr': img.get(v_key)}
+                            break
+
+                if live_video:
+                    # 3.1 优先检查 play_addr.uri / vid / download_addr.uri
+                    vid = (
+                        (live_video.get('play_addr') or {}).get('uri')
+                        or (live_video.get('download_addr') or {}).get('uri')
+                        or live_video.get('vid')
+                    )
+                    if vid and isinstance(vid, str):
+                        clean_vid = vid.strip()
+                        if clean_vid.startswith('http'):
+                            live_photo_url = clean_vid
+                        elif 'mp3' not in clean_vid.lower():
+                            live_photo_url = self._build_play_endpoint_url(clean_vid, ratio='1080p')
+
+                    # 3.2 检查多格式 play_addr 列表
+                    if not live_photo_url:
+                        for lk in ('play_addr', 'play_addr_h264', 'play_addr_lowbr', 'download_addr'):
+                            addr_obj = live_video.get(lk)
+                            if isinstance(addr_obj, dict):
+                                l_urls = addr_obj.get('url_list') or addr_obj.get('download_url_list') or []
+                                if isinstance(l_urls, list) and l_urls:
+                                    valid_l_urls = [u for u in l_urls if isinstance(u, str) and u.strip()]
+                                    if valid_l_urls:
+                                        live_photo_url = valid_l_urls[0]
+                                        break
+                                l_uri = addr_obj.get('uri')
+                                if l_uri and isinstance(l_uri, str) and not l_uri.startswith('http') and 'mp3' not in l_uri.lower():
+                                    live_photo_url = self._build_play_endpoint_url(l_uri, ratio='1080p')
+                                    break
+
+                # 4. 组装结果
+                if img_url or live_photo_url:
+                    if live_photo_url:
+                        image_results.append({
+                            'url': img_url or '',
+                            'live_photo_url': live_photo_url
+                        })
+                    else:
+                        image_results.append(img_url)
+
+            return image_results
 
         except Exception as e:
             logger.warning(f"Failed to parse image list: {e}")

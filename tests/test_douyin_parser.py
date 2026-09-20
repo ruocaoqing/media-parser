@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 import urllib.parse
 from unittest.mock import Mock, patch
@@ -898,7 +899,160 @@ class DouyinParserTest(unittest.TestCase):
         parser = self.make_parser(data)
         self.assertEqual(parser.get_cover_photo_url(), "https://p3.douyinpic.com/dynamic_cover.webp")
 
+    def test_image_post_info_and_live_photo_uri_extraction(self):
+        """测试现代 image_post_info 结构与 Live Photo 从 video.play_addr.uri 自动构造播放端点"""
+        data = {
+            "aweme_detail": {
+                "desc": "新版实况图集测试",
+                "image_post_info": {
+                    "images": [
+                        {
+                            "url_list": [
+                                "https://p1.douyinpic.com/thumb.jpg",
+                                "https://p3.douyinpic.com/origin.jpg"
+                            ],
+                            "video": {
+                                "play_addr": {
+                                    "uri": "v0200fg10000abc12345"
+                                }
+                            }
+                        },
+                        {
+                            "display_image": {
+                                "url_list": ["https://p3.douyinpic.com/static.jpg"]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+        parser = self.make_parser(data)
+        images = parser.get_image_list()
+        self.assertEqual(len(images), 2)
+        # 第一张为实况图，包含 url 和 live_photo_url
+        self.assertIsInstance(images[0], dict)
+        self.assertEqual(images[0]['url'], "https://p3.douyinpic.com/origin.jpg")
+        self.assertIn("v0200fg10000abc12345", images[0]['live_photo_url'])
+        self.assertIn("ratio=1080p", images[0]['live_photo_url'])
+        # 第二张为普通图片
+        self.assertEqual(images[1], "https://p3.douyinpic.com/static.jpg")
+
+    def test_video_download_addr_original_endpoint_and_multi_metric_selection(self):
+        """测试无 bit_rate 时从 download_addr 提取原画端点，以及多分辨率综合仲裁"""
+        data_orig = {
+            "aweme_detail": {
+                "desc": "原画端点测试",
+                "video": {
+                    "download_addr": {
+                        "uri": "v0300fg10000xyz7890"
+                    }
+                }
+            }
+        }
+        parser_orig = self.make_parser(data_orig)
+        url = parser_orig.get_real_video_url()
+        self.assertIsNotNone(url)
+        self.assertIn("v0300fg10000xyz7890", url)
+        self.assertIn("ratio=default", url)
+
+        # 测试在 bit_rate 中按 分辨率(宽*高) 与码率 综合仲裁
+        data_streams = {
+            "aweme_detail": {
+                "desc": "画质多维度仲裁",
+                "video": {
+                    "bit_rate": [
+                        {
+                            "bit_rate": 1500000,
+                            "is_h265": 0,
+                            "width": 1280,
+                            "height": 720,
+                            "play_addr": {"url_list": ["http://cdn.douyin.com/720p.mp4"]}
+                        },
+                        {
+                            "bit_rate": 1200000,
+                            "is_h265": 0,
+                            "width": 1920,
+                            "height": 1080,  # 分辨率更高
+                            "play_addr": {"url_list": ["http://cdn.douyin.com/1080p.mp4"]}
+                        }
+                    ]
+                }
+            }
+        }
+        parser_stream = self.make_parser(data_streams)
+        # 应当优选 1080p 分辨率流（像素数 1920*1080 > 1280*720）
+        self.assertEqual(parser_stream.get_real_video_url(), "http://cdn.douyin.com/1080p.mp4")
+
+    def test_uifid_extracted_and_header_injected(self):
+        """测试从 Cookie、纯 hash 或独立环境变量中自动提取 UIFID 并注入到 uifid 请求头"""
+        parser = self.make_parser({})
+        parser.cookie = "odin_tt=123; UIFID=deadbeef123456; ttwid=abc"
+        self.assertEqual(parser._get_uifid(), "deadbeef123456")
+
+        # 验证直接传入纯 hex 字符串作为 cookie 也能被识别为 uifid
+        parser.cookie = "ccaf4ddfc567c2ea7983832ca74975440c9b4528762c7e101401412a981d7e99"
+        self.assertEqual(parser._get_uifid(), "ccaf4ddfc567c2ea7983832ca74975440c9b4528762c7e101401412a981d7e99")
+
+        # 验证独立环境变量 DOUYIN_UIFID
+        with patch.dict(os.environ, {"DOUYIN_UIFID": "env_uifid_value_123456"}):
+            self.assertEqual(parser._get_uifid(), "env_uifid_value_123456")
+
+        # 验证 _request_api_with_retry 发送时携带了 uifid header
+        parser.cookie = "UIFID=deadbeef123456"
+        with patch.object(parser.session, "get") as mock_get:
+            mock_resp = Mock()
+            mock_resp.status_code = 200
+            mock_resp.text = json.dumps({"aweme_detail": {"desc": "test"}})
+            mock_resp.json.return_value = {"aweme_detail": {"desc": "test"}}
+            mock_get.return_value = mock_resp
+
+            parser._request_api_with_retry("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=123",
+                                           referer="https://www.douyin.com/note/123",
+                                           validate=lambda d: bool(d.get("aweme_detail")))
+            self.assertTrue(mock_get.called)
+            call_headers = mock_get.call_args[1]["headers"]
+            self.assertEqual(call_headers.get("uifid"), "deadbeef123456")
+
+    def test_default_api_max_attempts_is_two(self):
+        """测试 Web 接口重试次数默认降为 2 次，避免长时间阻塞"""
+        self.assertEqual(douyin_module.API_MAX_ATTEMPTS, 2)
+
+    def test_secsdk_cookies_sanitized_in_cookie_header(self):
+        """测试自动过滤导致 Argus 报 Signature Not Found 403 的 SecSDK 指纹和票据 Cookie"""
+        parser = self.make_parser({})
+        parser.cookie = (
+            "sessionid=my_sess; sessionid_ss=my_sess; UIFID=my_uifid; "
+            "bd_ticket_guard_client_data=toxic; _bd_ticket_crypt_cookie=toxic; "
+            "__security_mc_1_s_sdk_cert_key=toxic; fpk1=toxic; fpk2=toxic; "
+            "x_tt_token=toxic; sdk_source_info=toxic; odin_tt=safe_odin"
+        )
+        cookie_header = parser._get_cookie_header(ttwid="test_ttwid")
+        self.assertIn("sessionid=my_sess", cookie_header)
+        self.assertIn("UIFID=my_uifid", cookie_header)
+        self.assertIn("odin_tt=safe_odin", cookie_header)
+        self.assertIn("ttwid=test_ttwid", cookie_header)
+        # 验证危险 SecSDK 字段均被彻底过滤
+        self.assertNotIn("bd_ticket_guard", cookie_header)
+        self.assertNotIn("_bd_ticket_crypt_cookie", cookie_header)
+        self.assertNotIn("__security", cookie_header)
+        self.assertNotIn("fpk", cookie_header)
+        self.assertNotIn("x_tt_token", cookie_header)
+        self.assertNotIn("sdk_source_info", cookie_header)
+
+    def test_sign_secsdk_calculation(self):
+        """测试 x-secsdk-web-signature 签名纯算与参数规范化"""
+        uifid = "deadbeef123456"
+        ts = 1789880000
+        url = "https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=123"
+        signed_url = DouyinParser._sign_secsdk(url, uifid, ts=ts)
+        self.assertIn("uifid=deadbeef123456", signed_url)
+        self.assertIn(f"timestamp={ts}", signed_url)
+        self.assertIn("x-secsdk-web-signature=", signed_url)
+        # 验证空 uifid 时原样返回
+        self.assertEqual(DouyinParser._sign_secsdk(url, ""), url)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

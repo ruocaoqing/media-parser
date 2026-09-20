@@ -46,7 +46,7 @@
 | 13 | **微博** | 视频 / 直播回放 / 微博正文 / 多图 | ✅ 支持 | 🟢 免配置 (可选 Cookie 防风控) | 移动端 H5 接口 + 直播组件 + Base62 解码 | [查看指南](parsers/weibo.md) |
 | 14 | **知乎** | 视频 (Video Pin) / 想法 / 问答 | ✅ 支持 | 🟢 免配置 | Web API 多路由正则提取 | [查看指南](parsers/zhihu.md) |
 | 15 | **皮皮虾** | 视频 / 图文 | ✅ 支持 | 🟢 免配置 | H5 接口数据解析 | [查看指南](parsers/pipixia.md) |
-| 16 | **皮皮搞笑** | 视频 | ✅ 支持 | 🟢 免配置 | H5 页面 JSON 提取 | [查看指南](parsers/pipigaoxiao.md) |
+| 16 | **皮皮搞笑** | 视频 / 图集 | ✅ 支持 | 🟢 免配置 | H5 分享接口解析 | [查看指南](parsers/pipigaoxiao.md) |
 | 17 | **最右** | 视频 / 图集 | ✅ 支持 | 🟢 免配置 | H5 接口键值映射提取 | [查看指南](parsers/zuiyou.md) |
 | 18 | **AcFun** | 视频 (m3u8/MP4) | ✅ 支持 | 🟢 免配置 | KSPlayer 播放器参数还原 | [查看指南](parsers/acfun.md) |
 | 19 | **汽水音乐** | UGC 视频 / 背景原声 | ✅ 支持 | 🟢 免配置 | 字节系分享 API | [查看指南](parsers/qsmusic.md) |
@@ -55,7 +55,7 @@
 | 22 | **微信视频号** | 视频 / 图集 / 原声音频 | ✅ 支持 | 🔐 需 YUANBAO_COOKIE (媒体流/图集) | 视频号短链 + 腾讯元宝双轨解析 | [查看指南](parsers/wechat-channels.md) |
 | 23 | **腾讯视频/频道** | 视频 | ✅ 支持 | 🟢 免配置 | 企鹅频道分享解析 | [查看指南](parsers/tencent-channel.md) |
 | 24 | **西瓜视频** | 视频 | ✅ 支持 | 🟢 免配置 | 移动端 SSR + 字节 VOD + 抖音链路兜底 | [查看指南](parsers/xigua.md) |
-| 25 | **今日头条** | 视频 / 微头条视频 | ✅ 支持 | 🟢 免配置 | 移动端 SSR + 字节 VOD + 抖音链路兜底 | [查看指南](parsers/toutiao.md) |
+| 25 | **今日头条** | 视频 / 微头条图文 / 图文长文配图 | ✅ 支持 | 🟢 免配置 | 移动端 SSR + 字节 VOD + 微头条归一化 + 抖音链路兜底 | [查看指南](parsers/toutiao.md) |
 | 26 | **新片场** | 高清视频 | ✅ 支持 | 🟢 免配置 | Next.js SSR 播放页提取 | [查看指南](parsers/xinpianchang.md) |
 | 27 | **好看视频** | 百度短视频 | ✅ 支持 | 🟢 免配置 | 百度视频落地页提取 | [查看指南](parsers/haokan.md) |
 | 28 | **美拍** | 视频 | ✅ 支持 | 🟢 免配置 | 网页 MP4 流还原 | [查看指南](parsers/meipai.md) |
@@ -110,8 +110,8 @@ YUANBAO_COOKIE="hy_user=xxx; hy_token=yyy;"
 # 3. 小红书防风控 / 高频解析 (可选，解决服务器 IP 遭遇的 302 登录拦截)
 XHS_COOKIE="a1=xxx; webId=yyy; web_session=zzz;"
 
-# 4. 抖音放映厅长视频 (可选，仅在解析 /lvdetail/ 长片时需要)
-DOUYIN_COOKIE="s_v_web_id=verify_xxx; __ac_nonce=xxx;"
+# 4. 抖音 LivePhoto 实况流 / 放映厅 (可选，常规短视频免 Cookie 毫秒级直出；云端提取实况动图流可填入含 UIFID 的 Cookie)
+DOUYIN_COOKIE="UIFID=xxx; passport_csrf_token=yyy;"
 
 # 5. 拼多多多多视频 (可选，用于多多短视频信息流原画解析)
 PINDUODUO_COOKIE="PDDAccessToken=xxx;"

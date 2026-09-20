@@ -28,10 +28,14 @@ class YangshipinParser(BaseParser):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
         self.vid = None
+        self.article_id = None
         self.title = ""
         self.cover_url = None
         self.video_url = None
+        self.description = None
+        self.audio_url = None
         self.image_list = []
+        self.video_list = []
         self.author = None
         self._parse()
 
@@ -128,19 +132,125 @@ class YangshipinParser(BaseParser):
         except Exception as e:
             logger.warning("Failed to fetch video stream from Yangshipin playvinfo for vid %s: %s", vid, e)
 
+    @staticmethod
+    def _clean_article_html(html_content: str) -> str | None:
+        """将文章富文本 HTML 解析转换为保留自然段落的纯文本。"""
+        if not html_content:
+            return None
+        soup = BeautifulSoup(html_content, "html.parser")
+        for tag in soup.find_all(["script", "style"]):
+            tag.decompose()
+        for tag in soup.find_all("br"):
+            tag.replace_with("\n")
+        for tag in soup.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "section", "article"]):
+            tag.append("\n")
+        lines = []
+        for line in soup.get_text().replace("\xa0", " ").splitlines():
+            clean_line = re.sub(r"[\t\f\v ]+", " ", line).strip()
+            if clean_line:
+                lines.append(clean_line)
+        return "\n\n".join(lines) if lines else None
+
+    def _fetch_article_info(self, article_id: str) -> None:
+        """通过央视频开放接口获取图文文章/资讯数据及内嵌多媒体。"""
+        if not article_id:
+            return
+
+        api_urls = [
+            "https://comment.yangshipin.cn/web/article/article_info",
+            "https://h5access.yangshipin.cn/web/article/article_info",
+        ]
+        params = {
+            "vappid": "59306155",
+            "vsecret": "b42702bf7309a179d102f3d51b1add2fda0bc7ada64cb801",
+            "raw": "1",
+            "targetId": "1",
+            "id": article_id,
+        }
+        headers = {
+            "User-Agent": USER_AGENT_M[0],
+            "Referer": "https://m.yangshipin.cn/",
+            "Accept": "application/json, text/plain, */*",
+        }
+
+        for api_url in api_urls:
+            try:
+                resp = self.session.get(api_url, params=params, headers=headers, timeout=5)
+                if resp.status_code != 200:
+                    continue
+                res_json = resp.json()
+                data = res_json.get("data", {})
+                if not data or data.get("errCode") != 0:
+                    continue
+
+                head = data.get("head") or {}
+                if not self.title:
+                    self.title = (head.get("title") or "").strip()
+                if not self.cover_url:
+                    self.cover_url = head.get("coverImage")
+                source = head.get("source")
+                if source and not self.author:
+                    self.author = {
+                        "name": source,
+                        "avatar": None,
+                    }
+
+                content_obj = data.get("content") or {}
+                raw_images = content_obj.get("images") or []
+                for img in raw_images:
+                    if img and img not in self.image_list:
+                        self.image_list.append(img)
+
+                raw_html = content_obj.get("content") or ""
+                if raw_html:
+                    self.description = self._clean_article_html(raw_html)
+
+                audio_capsule = data.get("audioCapsule")
+                if isinstance(audio_capsule, dict) and audio_capsule.get("audioUrl"):
+                    self.audio_url = audio_capsule.get("audioUrl")
+                elif isinstance(audio_capsule, str) and audio_capsule.startswith("http"):
+                    self.audio_url = audio_capsule
+
+                # 内嵌视频提取
+                videos = content_obj.get("videos") or []
+                embedded_vids = []
+                for v in videos:
+                    if isinstance(v, dict) and v.get("vid"):
+                        embedded_vids.append(v.get("vid"))
+                    elif isinstance(v, str):
+                        embedded_vids.append(v)
+
+                if not embedded_vids and raw_html:
+                    embedded_vids = re.findall(r'<cctv_video\s+[^>]*id=[\'"]([^\'"]+)[\'"]', raw_html, re.I)
+
+                if embedded_vids:
+                    if not self.vid:
+                        self.vid = embedded_vids[0]
+                    for vid in embedded_vids:
+                        self._fetch_video_url_by_vid(vid)
+                        if self.video_url and self.video_url not in self.video_list:
+                            self.video_list.append(self.video_url)
+
+                break
+            except Exception as e:
+                logger.warning("Failed to fetch article info for Yangshipin article %s from %s: %s", article_id, api_url, e)
+
     def _parse(self):
         if not self.real_url:
             return
 
-        # 尝试先从 URL 中提取 vid
+        # 尝试先从 URL 中提取 vid 与 article_id
         parsed_url = urlparse(self.real_url)
         qs = parse_qs(parsed_url.query)
         self.vid = qs.get("vid", [None])[0]
+        self.article_id = qs.get("articleid", [None])[0] or qs.get("articleId", [None])[0] or qs.get("id", [None])[0]
 
         html = self.fetch_html_content()
         if not html:
             logger.warning("Failed to fetch HTML content for Yangshipin URL: %s", self.real_url)
-            if self.vid:
+            if self.article_id:
+                self._fetch_article_info(self.article_id)
+            elif self.vid:
                 self._fetch_video_url_by_vid(self.vid)
             return
 
@@ -155,11 +265,24 @@ class YangshipinParser(BaseParser):
             qs = parse_qs(parsed_url.query)
             if not self.vid or self.vid == "5Sqx":
                 self.vid = qs.get("vid", [None])[0]
+            if not self.article_id:
+                self.article_id = qs.get("articleid", [None])[0] or qs.get("articleId", [None])[0] or qs.get("id", [None])[0]
             html = self.fetch_html_content()
             if not html:
-                if self.vid:
+                if self.article_id:
+                    self._fetch_article_info(self.article_id)
+                elif self.vid:
                     self._fetch_video_url_by_vid(self.vid)
                 return
+
+        # 若目标为文章页，直接调用文章接口解析
+        if not self.article_id and "article" in parsed_url.path:
+            article_match = re.search(r'article(?:id)?=([0-9a-zA-Z_]+)', self.real_url)
+            if article_match:
+                self.article_id = article_match.group(1)
+
+        if self.article_id:
+            self._fetch_article_info(self.article_id)
 
         try:
             # 1. 尝试从横屏视频 STATE 提取 (__STATE_video__)
@@ -168,11 +291,13 @@ class YangshipinParser(BaseParser):
                 sv = data_vid.get("payloads", {}).get("sharevideo", {})
                 if not self.vid:
                     self.vid = sv.get("vid")
-                self.title = (sv.get("title") or "").strip()
-                self.cover_url = sv.get("cover_pic")
+                if not self.title:
+                    self.title = (sv.get("title") or "").strip()
+                if not self.cover_url:
+                    self.cover_url = sv.get("cover_pic")
                 om_info = sv.get("om_info", {})
                 author_name = om_info.get("title")
-                if author_name:
+                if author_name and not self.author:
                     self.author = {
                         "name": author_name,
                         "avatar": None,
@@ -194,7 +319,7 @@ class YangshipinParser(BaseParser):
                             or vd.get("poster", {}).get("poster", {}).get("imageUrl")
                         )
                     actor = vd.get("detailFollowItem", {}).get("actorItem", {})
-                    if actor:
+                    if actor and not self.author:
                         nick_name = actor.get("nickName", {}).get("text")
                         head_url = actor.get("headUrl")
                         if nick_name or head_url:
@@ -218,7 +343,7 @@ class YangshipinParser(BaseParser):
                     if og_img and og_img.get("content"):
                         self.cover_url = og_img["content"].strip()
 
-            if not self.vid:
+            if not self.vid and not self.article_id:
                 vid_match = re.search(r'[?&]vid=([0-9a-zA-Z_]+)', self.real_url) or re.search(r'["\']vid["\']\s*:\s*["\']([0-9a-zA-Z_]+)["\']', html)
                 if vid_match:
                     self.vid = vid_match.group(1)
@@ -227,13 +352,13 @@ class YangshipinParser(BaseParser):
             logger.exception("Error parsing Yangshipin page: %s", exc)
 
         # 4. 根据提取到的 vid 请求视频播放地址
-        if self.vid:
+        if self.vid and not self.video_url:
             self._fetch_video_url_by_vid(self.vid)
 
         if self.title:
             self.title = re.sub(r'<[^>]+>', '', self.title).strip()
 
-        if not self.video_url and self.cover_url and self.cover_url not in self.image_list:
+        if not self.video_url and not self.image_list and self.cover_url:
             self.image_list.append(self.cover_url)
 
     def _extract_state_json(self, html, state_key):
@@ -258,11 +383,20 @@ class YangshipinParser(BaseParser):
     def get_title_content(self):
         return self.title or ""
 
+    def get_description(self):
+        return self.description
+
     def get_cover_photo_url(self):
         return self.cover_url
 
     def get_author_info(self):
         return self.author
 
+    def get_audio_url(self):
+        return self.audio_url
+
     def get_image_list(self):
         return self.image_list
+
+    def get_video_list(self):
+        return self.video_list

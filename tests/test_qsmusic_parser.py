@@ -80,6 +80,76 @@ class QSMusicParserTest(unittest.TestCase):
             ]
         )
 
+    def test_flags_vip_preview(self):
+        router_data = {"loaderData": {"track_page": {"audioWithLyricsOption": {
+            "url": "https://audio.example.com/clip.mp4",
+            "trackName": "会员歌曲",
+            "artistName": "会员歌手",
+            "artistIdStr": "10086",
+            "coverURL": "https://image.example.com/cover.jpg",
+            "duration": 264.333,
+            "offsetDuration": 30.001,
+        }}}}
+        response = Mock(url="https://music.douyin.com/qishui/share/track?track_id=6845")
+        response.text = f"<script>_ROUTER_DATA = {json.dumps(router_data)};</script>"
+
+        with patch("requests.Session.get", return_value=response):
+            parser = QSMusicParser("https://qishui.douyin.com/s/code/")
+
+        self.assertTrue(parser.is_preview)
+        self.assertEqual(parser.full_duration, 264.333)
+        self.assertEqual(parser.get_title_content(), "会员歌曲")
+        self.assertEqual(parser.get_author_info()["author_id"], "10086")
+        self.assertEqual(parser.get_cover_photo_url(), "https://image.example.com/cover.jpg")
+
+    def test_free_track_is_not_flagged_as_preview(self):
+        router_data = {"loaderData": {"track_page": {"audioWithLyricsOption": {
+            "url": "https://audio.example.com/full.mp4",
+            "trackName": "免费歌曲",
+            "duration": 388.728,
+            "previewStart": 0,
+            "previewEnd": 388.728,
+        }}}}
+        response = Mock(url="https://music.douyin.com/qishui/share/track?track_id=7225")
+        response.text = f"<script>_ROUTER_DATA = {json.dumps(router_data)};</script>"
+
+        with patch("requests.Session.get", return_value=response):
+            parser = QSMusicParser("https://qishui.douyin.com/s/code/")
+
+        self.assertFalse(parser.is_preview)
+        self.assertEqual(parser.full_duration, 388.728)
+        self.assertEqual(parser.get_audio_url(), "https://audio.example.com/full.mp4")
+
+    def test_flags_preview_from_player_payload(self):
+        page = Mock(url="https://music.douyin.com/qishui/share/track?track_id=6845376862848321538")
+        page.text = "<html></html>"
+        player = Mock()
+        player.raise_for_status = Mock()
+        player.json.return_value = {
+            "track": {
+                "name": "Just to Be in Love",
+                "duration": 264333,
+                "artists": [{"id": 6769796358737532929, "name": "Alex Rasov", "url_avatar": {"urls": ["https://img.example.com"], "uri": "avatar.jpg"}}],
+                "album": {"url_cover": {"urls": ["https://img.example.com"], "uri": "cover.jpg"}},
+            },
+            "track_player": {"video_model": json.dumps({
+                "video_duration": 30.001,
+                "video_list": [{"main_url": "https://audio.example.com/clip.mp4"}],
+            })},
+        }
+
+        with patch("requests.Session.get", side_effect=[page, player]):
+            parser = QSMusicParser(
+                "https://music.douyin.com/qishui/share/track?track_id=6845376862848321538"
+            )
+
+        self.assertTrue(parser.is_preview)
+        self.assertEqual(parser.full_duration, 264.333)
+        self.assertEqual(parser.get_audio_url(), "https://audio.example.com/clip.mp4")
+        self.assertEqual(parser.get_author_info()["author_id"], "6769796358737532929")
+        self.assertEqual(parser.get_author_info()["avatar"], "https://img.example.com/avatar.jpg")
+        self.assertEqual(parser.get_cover_photo_url(), "https://img.example.com/cover.jpg")
+
 
 if __name__ == "__main__":
     unittest.main()

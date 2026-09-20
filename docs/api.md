@@ -92,10 +92,40 @@ curl -X POST "http://localhost:5000/api/v1/parse" \
         "live_photo_url": "https://aweme.snssdk.com/aweme/v1/play/live_photo.mp4"
       }
     ],
-    "video_list": []
+    "video_list": [
+      "https://aweme.snssdk.com/aweme/v1/play/..."
+    ],
+    "subtitles": [
+      { "start": 0.64, "end": 2.12, "text": "文案/字幕内容" }
+    ]
   }
 }
 ```
+
+### 3.3 字段设计与兼容兜底规则
+
+为了让调用方使用最简逻辑接入并兼容 50 个平台的不同媒体形态，系统制定了以下统一字段语义与兜底策略：
+
+1. **标题与文案 (`title` / `desc`)**：
+   - 绝大多数社交平台（如最右、微博、抖音无标题图文）仅有正文文案而无独立标题；
+   - 当作品无独立标题时，系统会自动将 `desc`（正文文案）兜底赋予 `title`，确保前端或下载器总能拿到展示标题；
+   - 原始长文案或 AI 对话完整正文始终保留在 `desc` 中。
+
+2. **封面图 (`cover_url`)**：
+   - 视频作品优先返回官方高清封面；
+   - 图文/图集作品若无独立封面字段，系统会自动提取 `image_list` 的第一张图片作为 `cover_url` 兜底。
+
+3. **图集与实况图 (`image_list`)**：
+   - 普通静态图片：数组元素为高清图片直链字符串 `["https://..."]`；
+   - 实况图（Live Photo）：数组元素为对象结构 `[{"url": "封面图片直链", "live_photo_url": "动态视频片段直链"}]`。
+
+4. **多视频与合集 (`video_list`)**：
+   - 单视频作品：主视频直链放在 `video_url` 中；
+   - 多视频/分页视频/合集作品（如微信公众号多视频、网易云Event多视频）：除 `video_url` 返回首个主视频外，`video_list` 会返回全部视频直链数组（首项与 `video_url` 保持一致）。
+
+5. **试听截断标记 (`is_preview` / `full_duration`)**：
+   - 仅当平台下发截断的试听片段时出现（如汽水音乐 VIP 会员曲目匿名请求下发 30~60 秒试听）；
+   - `is_preview: true` 表示当前 `audio_url` 为试听片段，`full_duration` 为完整曲目时长（秒）。
 
 ---
 

@@ -476,7 +476,7 @@ class UrlParser:
         elif platform == "央视频":
             query_params = parse_qs(parsed_url.query)
             preserved_params = []
-            for key in ("vid", "cid", "type", "serverFrom"):
+            for key in ("vid", "cid", "type", "serverFrom", "articleid", "articleId", "id"):
                 value = query_params.get(key, [None])[0]
                 if value is not None:
                     preserved_params.append((key, value))
@@ -586,7 +586,7 @@ class UrlParser:
             params_item_id = query_params.get('item_id', [None])[0]
             if params_item_id:
                 return params_item_id
-            params_article_id = query_params.get('articleId', [None])[0]
+            params_article_id = query_params.get('articleId', [None])[0] or query_params.get('articleid', [None])[0]
             if params_article_id:
                 return params_article_id
             params_guid = query_params.get('guid', [None])[0]

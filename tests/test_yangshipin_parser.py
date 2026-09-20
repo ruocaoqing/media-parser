@@ -148,14 +148,90 @@ class YangshipinParserTest(unittest.TestCase):
             self.assertEqual(parser.get_cover_photo_url(), "https://jietufengmian.yangshipin.cn/cover3.jpg")
             self.assertEqual(parser.get_image_list(), ["https://jietufengmian.yangshipin.cn/cover3.jpg"])
 
-    def test_handles_empty_or_broken_html(self):
-        with patch.object(YangshipinParser, "fetch_html_content", return_value="<html><body>404 Not Found</body></html>"), \
-             patch.object(YangshipinParser, "_fetch_video_url_by_vid", return_value=None):
-            parser = YangshipinParser("https://m.yangshipin.cn/video?vid=empty")
-            self.assertEqual(parser.get_title_content(), "")
-            self.assertIsNone(parser.get_cover_photo_url())
-            self.assertIsNone(parser.get_author_info())
-            self.assertEqual(parser.get_image_list(), [])
+    def test_parses_article_successfully(self):
+        meta_html = """
+        <!DOCTYPE html>
+        <meta charset="utf-8">
+        <meta http-equiv="refresh" content="0; URL='https://m.yangshipin.cn/static/article.html?articleid=e05kmjv3gty29'"/>
+        <title>央视频</title>
+        """
+        article_page_html = "<html><head><title>文章</title></head><body></body></html>"
+        mock_article_resp = MagicMock()
+        mock_article_resp.status_code = 200
+        mock_article_resp.json.return_value = {
+            "data": {
+                "errCode": 0,
+                "head": {
+                    "title": "亚运乒乓球签表：上届冠亚军孙颖莎早田希娜同半区",
+                    "source": "体坛网",
+                    "publishTime": "2026-09-18 21:04",
+                    "coverImage": "https://jietufengmian.yangshipin.cn/cover_article.jpg"
+                },
+                "content": {
+                    "content": "<p>体坛周报全媒体原创</p><p>北京时间9月18日晚上，2026爱知-名古屋亚运会乒乓球项目各项签表正式出炉。</p>",
+                    "images": [
+                        "https://jietufengmian.yangshipin.cn/img1.jpg",
+                        "https://jietufengmian.yangshipin.cn/img2.jpg"
+                    ]
+                }
+            },
+            "ret": 0
+        }
+
+        with patch.object(YangshipinParser, "fetch_html_content", side_effect=[meta_html, article_page_html]), \
+             patch("requests.Session.get", return_value=mock_article_resp):
+            parser = YangshipinParser("https://www.yspapp.cn/6j3j")
+            self.assertEqual(parser.get_title_content(), "亚运乒乓球签表：上届冠亚军孙颖莎早田希娜同半区")
+            self.assertEqual(parser.get_cover_photo_url(), "https://jietufengmian.yangshipin.cn/cover_article.jpg")
+            self.assertEqual(parser.get_author_info(), {"name": "体坛网", "avatar": None})
+            self.assertEqual(
+                parser.get_description(),
+                "体坛周报全媒体原创\n\n北京时间9月18日晚上，2026爱知-名古屋亚运会乒乓球项目各项签表正式出炉。"
+            )
+            self.assertEqual(
+                parser.get_image_list(),
+                [
+                    "https://jietufengmian.yangshipin.cn/img1.jpg",
+                    "https://jietufengmian.yangshipin.cn/img2.jpg"
+                ]
+            )
+            self.assertIsNone(parser.get_real_video_url())
+            self.assertIsNone(parser.get_audio_url())
+
+    def test_parses_article_with_embedded_video_and_audio(self):
+        mock_article_resp = MagicMock()
+        mock_article_resp.status_code = 200
+        mock_article_resp.json.return_value = {
+            "data": {
+                "errCode": 0,
+                "head": {
+                    "title": "新闻联播重点快讯",
+                    "source": "央视新闻",
+                    "coverImage": "https://jietufengmian.yangshipin.cn/cover_news.jpg"
+                },
+                "content": {
+                    "content": "<p>今日新闻要点如下：</p><cctv_video id=\"v00000embedded\"></cctv_video>",
+                    "images": []
+                },
+                "audioCapsule": {
+                    "audioUrl": "https://audio.ysp.cctv.cn/news.mp3"
+                }
+            },
+            "ret": 0
+        }
+
+        def mock_fetch_video(self, vid):
+            self.video_url = f"https://mp4playcloud-cdn.ysp.cctv.cn/{vid}.mp4"
+
+        with patch.object(YangshipinParser, "fetch_html_content", return_value="<html></html>"), \
+             patch("requests.Session.get", return_value=mock_article_resp), \
+             patch.object(YangshipinParser, "_fetch_video_url_by_vid", side_effect=mock_fetch_video, autospec=True):
+            parser = YangshipinParser("https://m.yangshipin.cn/static/article.html?articleid=art123")
+            self.assertEqual(parser.get_title_content(), "新闻联播重点快讯")
+            self.assertEqual(parser.get_author_info(), {"name": "央视新闻", "avatar": None})
+            self.assertEqual(parser.get_audio_url(), "https://audio.ysp.cctv.cn/news.mp3")
+            self.assertEqual(parser.get_real_video_url(), "https://mp4playcloud-cdn.ysp.cctv.cn/v00000embedded.mp4")
+            self.assertEqual(parser.get_video_list(), ["https://mp4playcloud-cdn.ysp.cctv.cn/v00000embedded.mp4"])
 
 
 if __name__ == "__main__":

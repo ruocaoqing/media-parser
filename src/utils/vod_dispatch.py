@@ -22,7 +22,7 @@ from configs.logging_config import get_logger
 logger = get_logger(__name__)
 
 # play 网关主机：这些主机上的 /aweme/v1/play/ 地址会 302 派发到随机节点
-PLAY_GATEWAY_HOSTS = {'api-play-hl.amemv.com', 'aweme.snssdk.com', 'www.douyin.com'}
+PLAY_GATEWAY_HOSTS = {'api-play-hl.amemv.com', 'aweme.snssdk.com', 'www.douyin.com', 'www.iesdouyin.com'}
 
 # 摇签探测头：Range 只取 1 字节，跟完 302 立即断开
 _PROBE_HEADERS = {

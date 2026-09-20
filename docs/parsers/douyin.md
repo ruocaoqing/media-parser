@@ -26,7 +26,7 @@
   * 网页端合集长链：`https://www.douyin.com/collection/7123456789012345678`
 * **Cookie 依赖**：
   * **普通视频与普通图文 (100% 免配)**：完全无需用户登录 Cookie。常规视频直连**移动端 Feed 核心通道**（免 Argus 门禁、免 Cookie、免签名、毫秒级直出）；普通图文自动通过分享页 SSR 提取高清原图。
-  * **LivePhoto 实况动图 (`live_photo_url`)**：因动图流仅由 Web API (`/aweme/v1/web/aweme/detail/`) 下发，在住宅 IP / 本地环境下自动提取实况动图流；云服务器机房 IP 遭遇风控时自动保底降级为全量静态原图。
+  * **LivePhoto 实况照片 (`live_photo_url`)**：实况视频流仅由 PC Web 详情 API (`/aweme/v1/web/aweme/detail/`) 下发。在云服务器（机房 IP）下受字节跳动严格风控，需在 `.env` 中配置 `DOUYIN_COOKIE`，且必须包含完整登录 Cookie（含 `sessionid`, `sessionid_ss`, `passport_csrf_token`, `odin_tt` 等）以及 `UIFID` 字段。解析器会自动计算 `x-secsdk-web-signature` 签名并注入 `uifid` 请求头，完美穿透网关阻断；若未配置或遭遇不可抗力风控，自动保底降级为全量静态无水印原图。
   * **放映厅长片 (`/lvdetail/`)**：受字节跳动严格风控保护，可在 `.env` 中配置人机滑块通行证 `DOUYIN_COOKIE="s_v_web_id=verify_..."`（代码已做路由隔离，常规作品会自动剔除过期验证码）。
 
 ---
@@ -49,12 +49,12 @@ flowchart TD
     C -->|"独立音乐"| M1["请求 Music Detail API"]
     C -->|"连载合集"| K1["请求 Mix Aweme API"]
     C -->|"放映厅长片"| L1["请求 LVideo Detail API / 解析 PC 端 lvdetail"]
-    C -->|"图文/幻灯片/LivePhoto"| W0["1. 优先请求 Web 详情 API<br/>提取完整 LivePhoto 实况视频流<br/>(a_bogus 签名 + 指数退避重试)"]
+    C -->|"图文/幻灯片/LivePhoto"| W0["1. 优先请求 Web 详情 API<br/>提取完整 LivePhoto 实况视频流<br/>(自动注入 uifid 请求头 + a_bogus 签名，最多重试 2 次)"]
     C -->|"常规视频"| F0["1. 优先请求移动端 Feed API<br/>免 Argus 门禁 / 免 Cookie / 毫秒级直出<br/>(主节点 + 备用 snssdk 节点)"]
     
     W0 --> W1{"Web API 是否成功?"}
     W1 -->|"成功 (获取完整 LivePhoto + 原图)"| E["提取高清流 / 实况图集 / 字幕 / 音频"]
-    W1 -->|"失败/风控拦截"| S0["降级至移动端分享页 SSR<br/>(至少保障静态高清原图可用)"]
+    W1 -->|"失败/风控拦截 (极速短路)"| S0["降级至移动端分享页 SSR<br/>(至少保障静态高清原图可用)"]
     
     F0 --> F1{"Feed 匹配成功?"}
     F1 -->|"成功 (常规视频 >95%)"| E
@@ -62,12 +62,12 @@ flowchart TD
     
     S0 --> S1{"分享页 SSR 成功?"}
     S1 -->|"成功"| E
-    S1 -->|"未匹配"| D1["3. 回退 Web 详情 API 兜底<br/>a_bogus 签名 + 动态指数退避重试 (最多8次)"]
+    S1 -->|"未匹配"| D1["3. 回退 Web 详情 API 兜底<br/>自动注入 uifid 头 + a_bogus 签名 (最多 2 次)"]
     
     D1 --> D2{"Web API 响应判定"}
     D2 -->|"成功"| E
     D2 -->|"明确终态 (私密/已删除/日常权限)"| H["智能短路: 立即终止重试并跳过SSR<br/>透传官方 filter_detail 原因"]
-    D2 -->|"遭遇 403/500/网络抖动"| D3{"重试是否耗尽?"}
+    D2 -->|"遭遇 403/500/网络抖动"| D3{"重试是否耗尽 (2次)?"}
     D3 -->|"否"| D1
     D3 -->|"是"| F["4. 触发末级 SSR HTML 降级"]
     
@@ -108,9 +108,18 @@ flowchart TD
   https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id={aweme_id}&msToken={ms_token}&a_bogus={a_bogus}
   ```
 * **适用场景**：图文/实况作品主路径，以及常规视频前两步（Mobile Feed 与分享页 SSR）均未收录时的末级兜底防护网。
-* **退避重试与终态短路双重机制**：
-  * **针对 Argus 概率性 403**：严格保留最大 8 次重试与紧凑退避（单次上限 0.8s），为特殊受限作品提供最终兜底保障；
-  * **针对不可重试终端状态（短路熔断）**：当 Web API 明确返回已删除、仅自己可见或朋友日常权限等终端状态（`status_code == 0` 且带有 `filter_detail`）时，`_is_terminal_failure` 立即生效，**在第 1 次响应后立即终止重试**，并跳过无意义的 SSR HTML 兜底，将失效链接的整体耗时从 11~14 秒压缩至亚秒/秒级。
+* **UIFID 请求头自动注入与紧凑重试设计**：
+  * **自动挂载 `uifid` 请求头**：从配置的 `DOUYIN_COOKIE` 中自动提取 `UIFID`，自动挂载 HTTP 请求头 `uifid: <value>`。实测当请求头携带 `uifid` 时，网关直接豁免 `403 Blocked by ArgusSecurityPlugin Uifid Not Found` 门禁；
+  * **SecSDK 签名计算 (`x-secsdk-web-signature`) 纯算穿透**：
+    * 当在云服务器（IDC 机房 IP）或请求头携带 `uifid` 时，Argus 安全插件强制要求校验 Web SDK 签名，否则报错 `403 Blocked by ArgusSecurityPlugin Signature Not Found`；
+    * 解析器内置了 `_sign_secsdk` 算法：规范化 URL query（按照键名排序，值执行类似 JS 的 `encodeURIComponent` 编码并保留 `!*'()`），将 `uifid` 与时间戳 `timestamp` 拼接，通过内置盐值常量 `A96D855A08C0A9707F8BEF0D9A527E4E` 拼装待签名明文并计算 32 位小写 MD5，生成 `x-secsdk-web-signature` 追加到 URL query 中，实现云端免浏览器直连秒级穿透；
+  * **SecSDK 客户端动态指纹自动脱敏清洗**：
+    * 浏览器复制的完整 Cookie 常包含 `bd_ticket_guard_*`、`__security_*`、`fpk*`、`_bd_ticket_crypt_cookie`、`x_tt_token`、`sdk_source_info` 等浏览器专用环境指纹。脱离浏览器运行时代入服务端会误触发网关会话风控；
+    * `_get_cookie_header` 自动识别并剥离上述 SecSDK 专用敏感字段，仅保留通用会话凭据；
+  * **配置引号自动容错**：
+    * 兼容 Docker Compose / `.env` 中使用单引号 `'...'` 或双引号 `"..."` 包裹的值，自动剥离首尾引号，防止 Cookie 键名被识别为 `'sessionid` 或 `'UIFID`；
+  * **重试上限优化 (默认降为 2 次)**：鉴于常规视频已由 Mobile Feed 毫秒级直出，Web 接口仅服务于图集实况提取。有有效 Cookie 时第 1 次即成功，无有效 Cookie 时无需盲目循环；重试上限默认设为 **2 次**（仅用于应对偶发网络抖动），一旦失败在 **<0.5s 内极速降级到 SSR** 提取静态原图，彻底杜绝数秒的无谓等待；
+  * **不可重试终端状态（短路熔断）**：当 Web API 明确返回已删除、仅自己可见或朋友日常权限等终端状态（`status_code == 0` 且带有 `filter_detail`）时，`_is_terminal_failure` 立即生效，**在第 1 次响应后立即终止重试**，并跳过无意义的 SSR HTML 兜底，将失效链接的整体耗时从 11~14 秒压缩至亚秒/秒级。
 * **独立音乐详情接口**：
   ```text
   https://www.douyin.com/aweme/v1/web/music/detail/?music_id={music_id}&device_platform=webapp&aid=6383&channel=channel_pc_web&msToken={ms_token}&a_bogus={a_bogus}
@@ -127,6 +136,7 @@ flowchart TD
   * `User-Agent`：必须与签名计算时传入的 UA 严格一致（见 [BogusSigner](file:///Users/leo/Projects/media-parser/utils/signer/bytedance/bogus_signer.py)）。
   * `Referer`：根据内容形态动态区分（视频使用 `/video/{aweme_id}`，图文使用 `/note/{aweme_id}`）。
   * `Cookie`：携带 `ttwid` 及自定义 `DOUYIN_COOKIE`。
+  * `uifid`：自动从 Cookie 提取的设备指纹，用于突破 Argus 网关门禁。
 
 ### 3.4 动态 TTWID 获取机制
 抖音 Web 端详情接口要求必须携带有效的 `ttwid`。我们在 [DouyinParser](file:///Users/leo/Projects/media-parser/src/parsers/douyin_parser.py) 中实现了自动注册与类级别内存缓存：
@@ -192,7 +202,22 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
   1. **画质与裁剪**：`origin_cover` 是创作者选定的原始封面帧，画质最高且未经系统裁剪压缩；
   2. **兼容性与性能**：`dynamic_cover` 是带动画的 WebP 动图（通常 300KB~2MB），若直接作为缩略图会导致部分客户端/Web 控件持续循环解码闪烁，优先静态原封面可将体积压缩 80% 以上并杜绝动图闪烁。
 
-### 4.7 视频 URL 域名收敛（VOD 摇签）
+### 4.7 图文与 LivePhoto 实况照片全字段兼容
+* **图集多源结构扫描**：
+  * 全面兼容抖音新旧版返回结构：优先扫描 `image_post_info.images` / `image_post_info.image_list`（现代 Web 端新版图集），随后兜底 `images`、`image_list`、`image_infos`、`original_images`；
+* **实况动轨（Live Photo）提取与端点构造**：
+  * 对图集内每个元素，递归扫描 `video`、`video_play_addr`、`video_download_addr`；
+  * 若仅返回 `uri`，自动构造 1080p 无水印播放端点（`iesdouyin.com/aweme/v1/play/?video_id={uri}&ratio=1080p`），支持 `play_addr_h264`、`play_addr_lowbr`、`download_addr` 等备用字段；
+  * 输出格式保持向下兼容：普通图片为 `str`，实况图为 `{'url': ..., 'live_photo_url': ...}`。
+
+### 4.8 画质多维度仲裁与原画（download_addr）支持
+* **原画源文件端点支持**：
+  * 提取 `video.download_addr.uri`，构造 `ratio=default` 无水印原画端点，在缺失 `bit_rate` 码率流时优先输出创作者上传的原画片源；
+* **多维度流仲裁器**：
+  * 在 `bit_rate` 列表中综合评估：$\text{分辨率像素数 (Width} \times \text{Height)} \rightarrow \text{码率 (bit\_rate)} \rightarrow \text{文件体积 (data\_size)} \rightarrow \text{质量类型} \rightarrow \text{直链优先级}$；
+  * 优先筛选兼容性最好的 H.264 编码最高画质流，杜绝 Web/移动端跨平台播放黑屏。
+
+### 4.9 视频 URL 域名收敛（VOD 摇签）
 * **背景**：`url_list[2]` 优选的源站节点常为 play 网关地址（`api-play-hl.amemv.com/aweme/v1/play/...`），客户端请求时会 302 派发到**随机** CDN 节点——实测同一 play 地址 50 次派发出 29 个不同域名（含 `bdcgslb.com` / `jspcdn.cn:20443` 等无法进入小程序 downloadFile 白名单的第三方 PCDN）。且字节签名按节点绑定，对最终地址**更换主机名必返回 403**，域名无法改写、只能重取。
 * **方案**：`src/utils/vod_dispatch.py` 在服务端预先跟随 302 拿到最终 CDN 地址，**并发摇签**（每批 4 个 `Range: bytes=0-0` 轻量探测，`as_completed` 流式检查，命中白名单主机立即返回；未命中再摇下一批，累计最多 12 次）；全部未命中时退回最后一次结果（fail-open，与未开启时行为一致）。挂载于 `get_real_video_url` / `get_video_list` 对外入口，同一次解析内相同地址只摇一次（实例级缓存）。
 * **实测效果**：白名单覆盖率从 ~50% 提升至 5/5 全命中（首批命中 <1.2s），返回地址均可 206 下载。
@@ -203,7 +228,7 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
   | `DOUYIN_VOD_ALLOWED_HOSTS` | 内置 60 节点 | 摇签白名单，逗号分隔完整主机名；需与小程序 downloadFile 合法域名清单中的字节系节点保持同步 |
   | `DOUYIN_VOD_RESOLVE_BATCH` | `4` | 每批并发探测数 |
   | `DOUYIN_VOD_RESOLVE_MAX_ATTEMPTS` | `12` | 累计最多探测次数 |
-* **注意**：仅 play 网关地址（`api-play-hl.amemv.com` / `aweme.snssdk.com` / `www.douyin.com` 的 `/aweme/v1/play/` 路径）参与摇签；直连 CDN 形态（`/tos/` 链接）原样返回，域名不在白名单时仅记录日志。
+* **注意**：仅 play 网关地址（`api-play-hl.amemv.com` / `aweme.snssdk.com` / `www.douyin.com` / `www.iesdouyin.com` 的 `/aweme/v1/play/` 路径）参与摇签；直连 CDN 形态（`/tos/` 链接）原样返回，域名不在白名单时仅记录日志。挂载点：`get_real_video_url` / `get_video_list`（视频与分集）及 `get_image_list`（实况动轨 `live_photo_url`）。
 
 ---
 
@@ -218,12 +243,19 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
 3. **PC 端 CSR 空壳与移动端分享页 SSR 解析**：
    * *现象*：PC 端 `/video/{id}` 在无 Cookie / 匿名下返回纯客户端渲染空壳（72KB HTML，无任何 SSR 数据）；若用非贪婪正则 `_ROUTER_DATA\s*=\s*(\{.*?\});` 提取深层嵌套 JSON 会因提前截断而 100% 失败。
    * *解法*：统一请求移动端分享页 `https://www.iesdouyin.com/share/video/{id}` 并携带移动 UA，通过 `_extract_json_object_after` 花括号深度栈配对提取完整 `_ROUTER_DATA`，并在 `_find_aweme_detail` 中适配 `videoInfoRes.item_list`。
-4. **Argus 网关 403 拦截（`Blocked by ArgusSecurityPlugin Uifid Not Found`）与多轨直出架构**：
-   * *现象与机理*：PC Web 端 `/aweme/v1/web/aweme/detail/` 位于字节跳动 Argus 风控网关后，机房 IDC IP 匿名访问可能面临 403 拦截。
-   * *终极多轨路由策略*：
-     1. **常规视频**：走 **移动端 Feed 核心通道**（`api5-normal-c-hl.amemv.com`），免 Argus 门禁、免 Cookie、免签名，~200ms 直出；若未收录则走移动端分享页 SSR；
-     2. **图文/LivePhoto 作品**：由于实况动图 MP4 视频流仅存在于 Web Detail API 中（分享页 SSR 仅包含静态图），图文/幻灯片作品优先请求 **Web 详情接口** 提取完整实况；若遭遇 Argus 403 且重试耗尽，自动降级至 **分享页 SSR** 保障静态原图正常输出；
-     3. **兜底保障**：所有链路均配合终端状态（`_is_terminal_failure`）即时短路熔断机制。
+4. **Argus 网关 403 拦截（`Uifid Not Found` 与 `Signature Not Found`）与 SecSDK 双轨穿透**：
+   * *现象与机理*：PC Web 端 `/aweme/v1/web/aweme/detail/` 位于字节跳动 Argus 风控网关后。
+     - 若 Request Headers 缺失 `uifid`，网关报 `403 Blocked by ArgusSecurityPlugin Uifid Not Found`；
+     - 若在 URL 拼接了 `uifid` 或机房 IDC IP 触发深度检测，但缺少 `x-secsdk-web-signature`，网关报 `403 Blocked by ArgusSecurityPlugin Signature Not Found`；
+     - 若直接从浏览器完整 Cookie 复制带有 `bd_ticket_guard_*` 等 SecSDK 内部客户端指纹，服务端请求会被判定为会话状态异常阻断。
+   * *终极多轨路由策略与解法*：
+     1. **常规视频免风控**：走 **移动端 Feed 核心通道**（`api5-normal-c-hl.amemv.com`），免 Argus 门禁、免 Cookie、免签名，~200ms 直出；若未收录则走移动端分享页 SSR；
+     2. **UIFID 请求头自动注入 + SecSDK 签名自动签算**：
+        - 解析器从配置的 `DOUYIN_COOKIE` 中自动提取 `UIFID`，自动挂载 HTTP 请求头 `uifid: <value>`；
+        - 同时基于 `_sign_secsdk` 算法自动规范化 query 并生成合法的 `x-secsdk-web-signature` 追加至 URL 参数，双管齐下彻底攻破 Argus 机房 403 门禁，成功提取实况 MP4 动轨；
+     3. **SecSDK 毒药 Cookie 自动清洗**：自动剔除 `bd_ticket_guard_*`、`fpk*`、`__security_*` 等字段，只提交干净的基础会话 Cookie；
+     4. **重试次数降为 2 次与极速降级**：Web 重试上限设为 2 次，遇到突发网络波动或未配置 Cookie 时，在 **<0.5 秒内极速降级至分享页 SSR**，确保静态高清原图毫秒级产出，不再阻塞等待；
+     5. **兜底保障**：所有链路均配合终端状态（`_is_terminal_failure`）即时短路熔断机制。
 
 
 5. **私密/日常/已删除链接的不可重试终端状态与智能短路熔断**：

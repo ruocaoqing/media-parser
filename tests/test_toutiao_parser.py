@@ -87,6 +87,71 @@ class ToutiaoParserTest(unittest.TestCase):
         self.assertIsNone(ToutiaoParser._clean_description("<p> &nbsp; </p>"))
         self.assertIsNone(ToutiaoParser._clean_description(None))
 
+    def test_weitoutiao_thread_article_is_normalized(self):
+        """微头条（/w/ 链接）的正文、配图、作者挂在 articleInfo.thread.threadBase 下。"""
+        raw_json = {
+            "seoTDK": {"title": "到底昰偷情还是犯罪！？四川宜宾-今日头条"},
+            "articleInfo": {
+                "gid": "1876628745217031",
+                "bizTag": "微头条",
+                "thread": {
+                    "threadBase": {
+                        "title": "第一段\n\n第二段",
+                        "content": "第一段\n\n第二段",
+                        "threadType": 200,
+                        "largeImageList": [
+                            {"url": "https://p3-sign.toutiaoimg.com/a.jpeg"},
+                            {"url": "https://p3-sign.toutiaoimg.com/b.jpeg"},
+                        ],
+                        "user": {
+                            "info": {
+                                "name": "带你看社会",
+                                "avatarUrl": "https://p3-sign.toutiaoimg.com/avatar.jpeg",
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        with patch.object(ToutiaoParser, "_fetch_toutiao_mobile_ssr") as mock_ssr:
+            mock_ssr.return_value = {
+                "toutiao_article_info": ToutiaoParser._normalize_article(raw_json),
+                "vod_data": None,
+            }
+            parser = ToutiaoParser("https://m.toutiao.com/w/1876628745217031/")
+
+            self.assertEqual(parser.get_title_content(), "到底昰偷情还是犯罪！？四川宜宾")
+            self.assertEqual(parser.get_description(), "第一段\n第二段")
+            self.assertEqual(parser.get_author_info(), {
+                "author": "带你看社会",
+                "avatar": "https://p3-sign.toutiaoimg.com/avatar.jpeg",
+            })
+            self.assertEqual(parser.get_image_list(), [
+                "https://p3-sign.toutiaoimg.com/a.jpeg",
+                "https://p3-sign.toutiaoimg.com/b.jpeg",
+            ])
+            self.assertEqual(parser.get_video_list(), [])
+            self.assertIsNone(parser.get_real_video_url())
+
+    def test_article_content_images_are_collected(self):
+        """图文长文的配图内嵌在正文 HTML 中。"""
+        with patch.object(ToutiaoParser, "_fetch_toutiao_mobile_ssr") as mock_ssr:
+            mock_ssr.return_value = {
+                "toutiao_article_info": {
+                    "title": "图文长文",
+                    "content": '<p>正文</p><img src="https://p3.toutiaoimg.com/1.jpeg">'
+                               '<img data-src="https://p3.toutiaoimg.com/2.jpeg">',
+                },
+                "vod_data": None,
+            }
+            parser = ToutiaoParser("https://www.toutiao.com/article/7680960670263493172/")
+
+            self.assertEqual(parser.get_image_list(), [
+                "https://p3.toutiaoimg.com/1.jpeg",
+                "https://p3.toutiaoimg.com/2.jpeg",
+            ])
+
 
 if __name__ == "__main__":
     unittest.main()

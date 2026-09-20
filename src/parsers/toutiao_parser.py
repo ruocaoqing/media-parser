@@ -47,12 +47,41 @@ class ToutiaoParser(DouyinParser):
                 lines.append(normalized)
         return "\n".join(lines) or None
 
+    @staticmethod
+    def _normalize_article(raw_json):
+        """归一化 SSR 数据：微头条的正文、图片、作者存放在 articleInfo.thread.threadBase 下。"""
+        article_info = raw_json.get("articleInfo")
+        if not isinstance(article_info, dict):
+            return None
+
+        thread_base = ((article_info.get("thread") or {}).get("threadBase")) or {}
+        if thread_base:
+            user = ((thread_base.get("user") or {}).get("info")) or {}
+            if not article_info.get("title"):
+                seo_title = ((raw_json.get("seoTDK") or {}).get("title") or "").removesuffix("-今日头条").strip()
+                article_info["title"] = seo_title or thread_base.get("title")
+            if not article_info.get("content"):
+                article_info["content"] = thread_base.get("content") or thread_base.get("richContent")
+            if not article_info.get("mediaUser") and user:
+                article_info["mediaUser"] = {
+                    "screenName": user.get("name"),
+                    "avatarUrl": user.get("avatarUrl"),
+                }
+            article_info["threadImageList"] = [
+                img["url"]
+                for img in (thread_base.get("largeImageList") or thread_base.get("originImageList") or [])
+                if isinstance(img, dict) and img.get("url")
+            ]
+
+        return article_info
+
     def _fetch_toutiao_mobile_ssr(self, item_id: str):
         """通过今日头条移动端 SSR 渲染数据及 VOD 接口提取视频详情。"""
         if not item_id:
             return None
 
         candidate_urls = [
+            f"https://m.toutiao.com/w/{item_id}/",
             f"https://m.toutiao.com/video/{item_id}/",
             f"https://m.toutiao.com/i{item_id}/",
             f"https://m.toutiao.com/group/{item_id}/",
@@ -71,9 +100,8 @@ class ToutiaoParser(DouyinParser):
                     continue
 
                 text = urllib.parse.unquote(script.string.strip())
-                raw_json = json.loads(text)
-                article_info = raw_json.get("articleInfo")
-                if not article_info or not isinstance(article_info, dict):
+                article_info = self._normalize_article(json.loads(text))
+                if not article_info:
                     continue
 
                 token_v2 = article_info.get("playAuthTokenV2")
@@ -170,3 +198,20 @@ class ToutiaoParser(DouyinParser):
             return [url] if url else []
 
         return super().get_video_list()
+
+    def get_image_list(self):
+        if self.data and isinstance(self.data, dict) and "toutiao_article_info" in self.data:
+            article_info = self.data["toutiao_article_info"]
+            images = list(article_info.get("threadImageList") or [])
+            content = article_info.get("content")
+            if isinstance(content, str):
+                # 图文长文的配图内嵌在正文 HTML 中，微头条则走上面的 threadImageList
+                images.extend(
+                    img.get("src") or img.get("data-src")
+                    for img in BeautifulSoup(content, "lxml").find_all("img")
+                )
+            images = [url for url in dict.fromkeys(images) if url]
+            if images:
+                return images
+
+        return super().get_image_list()

@@ -17,7 +17,7 @@
 | **豆包 AI** | `DOUBAO_COOKIE` | - | 🟡 **可选 (无水印)**：公开图文免 Cookie；提取 1080P 无水印视频需要 | `sessionid_ss=xxx;` |
 | **即梦 AI** | `JIMENG_COOKIE` | - | 🟡 **可选 (扩展鉴权)**：公开分享免 Cookie；私有草稿/活动页鉴权需要 | `sessionid=xxx;` |
 | **微博** | `WEIBO_COOKIE` | - | 🟡 **可选 (防访客限制)**：常规公开博文免 Cookie；机房 IP 遭遇访客拦截或解析粉丝可见内容时配置 | `SUB=xxx;` |
-| **抖音** | `DOUYIN_COOKIE` | - | 🟢 **免配置 (100% 免 Cookie)**：日常短视频/图文图集免 Cookie；放映厅长片 (`/lvdetail/`) 可选滑块凭证 | `s_v_web_id=verify_xxx;` |
+| **抖音** | `DOUYIN_COOKIE` | `DY_COOKIE` | 🟢 **常规免配 (100% 免配)**：常规短视频/普通图文/音乐无需任何凭据；<br/>🟡 **实况图 (机房 IP)**：需完整登录 Cookie + `UIFID`；<br/>🟡 **放映厅长片**：需滑块通行证 `s_v_web_id` | 实况图需: `UIFID=xxx; sessionid=xxx; sessionid_ss=xxx; passport_csrf_token=xxx; odin_tt=xxx;`<br/>(即完整登录 Cookie 拼入 UIFID)；<br/>放映厅需: `s_v_web_id=verify_xxx;` |
 
 ---
 
@@ -51,7 +51,13 @@ PINDUODUO_COOKIE="PDDAccessToken=xxx;"
 
 # 豆包
 DOUBAO_COOKIE="sessionid_ss=xxx;"
+
+# 抖音（提取实况动图流时填入）
+DOUYIN_COOKIE="UIFID=xxx;"
 ```
+
+> **💡 关于引号书写与 Docker Compose 兼容性**：
+> 在 `.env` 中无论使用双引号 `KEY="value"`、单引号 `KEY='value'` 或无引号 `KEY=value`，解析器底层的 `CookieManager` 均已实现自动去除首尾引号与空格，杜绝 Docker Compose 将包裹引号作为 Cookie 键名（如变成 `'sessionid` 或 `'UIFID`）导致凭据失效的问题。
 
 ### 方式 B：通过 Docker Compose 部署
 在 [docker-compose.yml](file:///Users/leo/Projects/media-parser/docker-compose.yml) 所在的目录下编写 `.env`，Docker Compose 启动时会自动将变量注入容器环境：
@@ -121,13 +127,70 @@ docker compose up -d
 3. 填入 `.env` 中的 `DOUBAO_COOKIE`。
 
 ### 3.6 抖音 (`DOUYIN_COOKIE`)
-> **核心原则**：常规短视频、图集、LivePhoto、原声音乐等 **100% 免配置 Cookie 即可解析**。
 
-* **常规作品解析**：
-  * 常规短视频直连移动端 Feed 免 Argus 门禁通道，毫秒级直出；
-  * 普通图文与 LivePhoto 实况作品自动走 Web 详情接口与 SSR HTML 双轨路由：在家庭宽带或住宅 IP 下自动提取实况动图流，在云服务器机房 IP 遭遇风控时自动保底降级为全量无水印高清静态图片，保障服务不报错、稳定可用。
-* **放映厅长视频 / 短剧 (`/lvdetail/`)（可选）**：
-  * 若需解析受限放映厅长片，可在浏览器完成人机滑块后，在 **Application -> Cookies** 中提取临时凭证 `s_v_web_id=verify_xxx;` 填入 `.env`。代码已实现路由隔离，在解析常规作品时会自动过滤掉过期滑块码，避免误触发风控。
+#### 3.6.1 场景与所需字段一览表
+
+整个项目统一使用单一环境变量 `DOUYIN_COOKIE`，分为三种情况：
+
+| 业务场景 | 所需字段 | `DOUYIN_COOKIE` 配置示例 | 机制说明 |
+| :--- | :--- | :--- | :--- |
+| **1. 日常常规作品**<br/>(常规短视频 / 普通图文图集 / 背景音乐) | **无需配置**<br/>(100% 免配) | `DOUYIN_COOKIE=`<br/>*(留空即可)* | 直连移动端 Feed 核心通道与分享页 SSR，免 Cookie、免签名、毫秒级直出。 |
+| **2. 云服务器提取实况图**<br/>(LivePhoto MP4 动态流) | 需**完整登录 Cookie + `UIFID`**<br/>(最少字段：sessionid, sessionid_ss, passport_csrf_token, odin_tt 加上 UIFID) | `DOUYIN_COOKIE="UIFID=ccaf4...; sessionid=...; sessionid_ss=...; passport_csrf_token=...; odin_tt=...;"` | 实况视频轨仅由 Web 详情 API 下发。在云服务器机房 IP 下，**仅填 UIFID 是不够的**，必须同时具备登录态权限与 UIFID 设备指纹。系统会自动纯算 `x-secsdk-web-signature` 穿透 Argus 门禁。<br/>⚠️ **重要**：`uifid` 在 Network 中是与 `Cookie` 同级的独立请求头，需手动在 `DOUYIN_COOKIE` 中以 `UIFID=xxx;` 格式追加拼入！ |
+| **3. 放映厅长视频 / 短剧**<br/>(`/lvdetail/` 影视长片) | 需包含 **`s_v_web_id`**<br/>*(滑块通行证)* | `DOUYIN_COOKIE="s_v_web_id=verify_xxx; sessionid=xxx;"` | 涉及长片版权与严格人机验证，需在浏览器通过拼图滑块后获取 `s_v_web_id` 通行证。 |
+
+---
+
+#### 3.6.2 疑问解答：只填 UIFID 行不行？实况图到底需要哪些字段？
+
+* **明确结论：仅填 UIFID 是不行的！必须是【完整登录 Cookie】加上【UIFID】共同填入 `DOUYIN_COOKIE`。**
+* **为什么两者缺一不可？**
+  1. **登录会话凭据（`sessionid`、`sessionid_ss`、`passport_csrf_token`、`odin_tt` 等）**：
+     - Web 详情接口下发的 `image_post_info` 及 LivePhoto 实况动轨受访问控制，未登录状态在机房 IP 会被限制或返回空数据；
+  2. **设备指纹（`UIFID` 及 `x-secsdk-web-signature`）**：
+     - 字节跳动 ArgusSecurityPlugin 安全网关对机房 IP 强制校验 `uifid` 请求头及 `x-secsdk-web-signature` 签名，缺失则直接报 403 阻断；
+  3. **协同生效**：
+     - 只有在 `DOUYIN_COOKIE` 中**同时具备登录凭据和 `UIFID`** 时，解析器才能既突破 Argus 403 门禁，又获得 Web API 正常返回的高清实况 MP4 视频流。
+* **为什么复制的完整 Cookie 里面没有 UIFID？**
+  * 在浏览器 F12 的 **Network（网络）** 抓包中，向抖音发起的 HTTP 请求标头结构为：
+    - 标头 A：`Cookie: sessionid=...; passport_csrf_token=...; odin_tt=...;`
+    - 标头 B：`uifid: ccaf4ddfc567c2ea7983832ca...`
+  * **`uifid` 是与 `Cookie` 并列同级的独立自定义请求头**。如果直接复制 `Cookie:` 标头，里面是**绝对没有** `UIFID` 的！必须把 `uifid` 的值手动以 `UIFID=xxx;` 拼入 `DOUYIN_COOKIE`。
+* **推荐最少必要字段**：
+  ```env
+  DOUYIN_COOKIE="UIFID=你的uifid值; sessionid=你的sessionid; sessionid_ss=你的sessionid_ss; passport_csrf_token=你的csrf_token; odin_tt=你的odin_tt;"
+  ```
+  *(或者直接把浏览器 Network 里的整串 `Cookie` 复制下来，并在最前面或最后面拼上 `UIFID=你的uifid值;`。代码会自动脱敏过滤 `bd_ticket_guard_*` 等毒药字段)*
+
+---
+
+#### 3.6.3 如何提取凭据并配置到 `DOUYIN_COOKIE`
+
+1. **登录抖音网页版**：在电脑浏览器打开 [抖音网页版 (douyin.com)](https://www.douyin.com/) 并完成账号登录。
+2. **提取 Cookie 标头**：
+   * 按 `F12` 打开开发者工具 $\rightarrow$ 切换到 **Network (网络)** 标签页；
+   * 刷新页面或点击任意作品，在请求列表中找到任意以 `/aweme/v1/web/` 开头的请求；
+   * 在 **Request Headers (请求标头)** 中找到 **`Cookie`**，复制其完整内容。
+3. **提取 uifid 独立标头**：
+   * 在同一个请求的 **Request Headers** 中找到 **`uifid`**，复制该 256 位十六进制字符串。
+4. **拼装写入 `.env`**：
+   ```env
+   # 将 UIFID=你的值; 与复制的 Cookie 拼在一起：
+   DOUYIN_COOKIE="UIFID=ccaf4ddfc567c2ea...; sessionid=...; sessionid_ss=...; passport_csrf_token=...; odin_tt=...;"
+   ```
+
+---
+
+#### 3.6.4 放映厅长视频凭据提取 (`s_v_web_id`)
+
+若需在云端提取抖音放映厅影视长片或短剧 (`/lvdetail/`)：
+1. 在电脑浏览器打开目标长视频页面，若弹出拼图滑块，完成滑块拖动验证；
+2. 按 `F12` 打开 **Application -> Cookies -> https://www.douyin.com**；
+3. 复制滑块通行证 `s_v_web_id`（通常形如 `verify_mxxx...`）以及登录态 `sessionid`（若该长片需要 VIP/登录权限）；
+4. 填入 `.env`：
+   ```env
+   DOUYIN_COOKIE="s_v_web_id=verify_mtr655rg_ZG8sERuu_...; sessionid=...;"
+   ```
+   *(代码已内置路由隔离，常规短视频解析时会自动过滤此滑块码，避免过期滑块干扰主路径)*
 
 ### 3.7 微博 (`WEIBO_COOKIE`)
 1. 访问 [微博网页版 (weibo.com)](https://weibo.com/) 并登录账号。

@@ -248,6 +248,10 @@ def _execute_parse(text, access):
             data_dict['video_list'] = processed_video_list
         if content_data.get('subtitles'):
             data_dict['subtitles'] = content_data['subtitles']
+        if content_data.get('is_preview') is True:
+            data_dict['is_preview'] = True
+            if content_data.get('full_duration'):
+                data_dict['full_duration'] = content_data['full_duration']
         
         logger.debug(f'Parse Success for platform {platform}')
         response, status = make_response(200, '成功', data_dict, True), 200
@@ -293,7 +297,9 @@ def _fetch_with_retry(parser, platform):
             'author': safe_execute(getattr(parser, 'get_author_info', None)),
             'image_list': safe_execute(getattr(parser, 'get_image_list', None), default=[]),
             'audio_url': safe_execute(getattr(parser, 'get_audio_url', None)),
-            'subtitles': safe_execute(getattr(parser, 'get_subtitles', None))
+            'subtitles': safe_execute(getattr(parser, 'get_subtitles', None)),
+            'is_preview': safe_execute(lambda: parser.is_preview, default=False),
+            'full_duration': safe_execute(lambda: parser.full_duration),
         }
         if res['video_url'] or res['video_list'] or res['image_list'] or res['audio_url']:
             return res
