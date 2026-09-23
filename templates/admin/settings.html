@@ -134,34 +134,6 @@
 
                                 <div class="py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-4">
                                     <div>
-                                        <div class="font-medium text-slate-900">默认试用天数</div>
-                                        <div class="text-xs text-slate-500 mt-0.5">新注册客户默认试用时长 (1 ~ 9999 天，或勾选永久有效)</div>
-                                    </div>
-                                    <div class="flex items-center gap-3 shrink-0">
-                                        <div class="relative w-28">
-                                            <input type="number" min="1" max="9999" data-default="365"
-                                                id="input_default_trial_days" name="default_trial_days"
-                                                value="{{ '365' if settings.get('default_trial_days') == '0' else settings.get('default_trial_days', '365') }}"
-                                                {{ 'disabled' if settings.get('default_trial_days')=='0' }}
-                                                oninput="validateNumberClamp(this)" onblur="normalizeNumberOnBlur(this)"
-                                                onchange="triggerSettingsSubmit(this)"
-                                                class="w-full pl-3 pr-8 py-1.5 text-xs text-right font-mono font-bold rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition disabled:opacity-40 disabled:bg-slate-100 disabled:cursor-not-allowed bg-slate-50/50">
-                                            <span
-                                                class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[11px] font-semibold text-slate-400">天</span>
-                                        </div>
-                                        <label
-                                            class="inline-flex items-center gap-1.5 cursor-pointer select-none text-xs font-medium text-slate-600 hover:text-slate-900">
-                                            <input type="checkbox" id="chk_unlimited_trial" name="chk_unlimited_trial"
-                                                value="1" {{ 'checked' if settings.get('default_trial_days')=='0' }}
-                                                onchange="toggleUnlimitedDays(this)"
-                                                class="rounded border-slate-300 text-brand focus:ring-brand/20 h-4 w-4">
-                                            <span>永久有效</span>
-                                        </label>
-                                    </div>
-                                </div>
-
-                                <div class="py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-4">
-                                    <div>
                                         <div class="font-medium text-slate-900">默认赠送积分</div>
                                         <div class="text-xs text-slate-500 mt-0.5">新注册客户初始赠送的解析积分额度 (0 ~ 99999999，或勾选不限制)
                                         </div>
@@ -190,6 +162,56 @@
                                         </label>
                                     </div>
                                 </div>
+
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 分组 3：小程序用户额度
+                     单独成卡，不挂 #registration-collapse-panel：这两项是小程序（微信端）用户的
+                     额度，跟「开放用户注册」没有关系。此前它们放在注册折叠面板里面，注册一关就
+                     被整块 display:none —— 值不会丢（隐藏不等于 disable，两项仍在同一个表单里、
+                     照常提交保存），但页面上既看不见、也改不了。 -->
+                <section class="bg-white rounded-xl border border-slate-200/80 p-5 sm:p-6 shadow-xs space-y-5">
+                    <div class="border-b border-slate-100 pb-3">
+                        <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+                            <span class="text-brand flex items-center justify-center">{{ icon('users', 'w-4 h-4') }}</span>
+                            小程序用户额度
+                        </h2>
+                    </div>
+                    <div class="divide-y divide-slate-100 text-sm">
+                        <div class="py-3.5 first:pt-0 last:pb-0 flex items-center justify-between gap-4">
+                            <div>
+                                <div class="font-medium text-slate-900">免费用户每日额度</div>
+                                <div class="text-xs text-slate-500 mt-0.5">非会员账号每日可解析的次数上限 (1 ~ 100000)</div>
+                            </div>
+                            <div class="relative w-28 shrink-0">
+                                <input type="number" min="1" max="100000" data-default="10"
+                                    id="input_wx_free_daily_quota" name="wx_free_daily_quota"
+                                    value="{{ settings.get('wx_free_daily_quota', '10') }}"
+                                    oninput="validateNumberClamp(this)" onblur="normalizeNumberOnBlur(this)"
+                                    onchange="triggerSettingsSubmit(this)"
+                                    class="w-full pl-3 pr-10 py-1.5 text-xs text-right font-mono font-bold rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition bg-slate-50/50">
+                                <span
+                                    class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[11px] font-semibold text-slate-400">次</span>
+                            </div>
+                        </div>
+
+                        <div class="py-3.5 first:pt-0 last:pb-0 flex items-center justify-between gap-4">
+                            <div>
+                                <div class="font-medium text-slate-900">每日签到奖励次数</div>
+                                <div class="text-xs text-slate-500 mt-0.5">每日签到一次赠送的额外解析次数 (1 ~ 100000)</div>
+                            </div>
+                            <div class="relative w-28 shrink-0">
+                                <input type="number" min="1" max="100000" data-default="10"
+                                    id="input_wx_checkin_bonus" name="wx_checkin_bonus"
+                                    value="{{ settings.get('wx_checkin_bonus', '10') }}"
+                                    oninput="validateNumberClamp(this)" onblur="normalizeNumberOnBlur(this)"
+                                    onchange="triggerSettingsSubmit(this)"
+                                    class="w-full pl-3 pr-10 py-1.5 text-xs text-right font-mono font-bold rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition bg-slate-50/50">
+                                <span
+                                    class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[11px] font-semibold text-slate-400">次</span>
                             </div>
                         </div>
                     </div>
@@ -383,20 +405,6 @@
         return String(val).replace(/,/g, '').trim();
     };
 
-    window.toggleUnlimitedDays = function (checkbox) {
-        const input = document.getElementById('input_default_trial_days');
-        if (!input) return;
-        if (checkbox.checked) {
-            input.dataset.prevValue = input.value && input.value !== '0' ? input.value : '365';
-            input.disabled = true;
-        } else {
-            input.disabled = false;
-            input.value = input.dataset.prevValue && input.dataset.prevValue !== '0' ? input.dataset.prevValue : '365';
-            input.focus();
-        }
-        triggerSettingsSubmit(checkbox);
-    };
-
     window.toggleUnlimitedCredits = function (checkbox) {
         const input = document.getElementById('input_default_initial_credits');
         if (!input) return;
@@ -464,7 +472,7 @@
         if (name === 'registration_enabled' || el.id === 'registration-toggle') {
             return el.checked ? '已开放用户自主注册' : '已关闭用户自主注册';
         }
-        if (name === 'default_user_qps' || name === 'default_trial_days' || name === 'chk_unlimited_trial' || name === 'default_initial_credits' || name === 'chk_unlimited_credits') {
+        if (name === 'default_user_qps' || name === 'default_initial_credits' || name === 'chk_unlimited_credits' || name === 'wx_free_daily_quota' || name === 'wx_checkin_bonus') {
             return '新账号默认初始参数已更新';
         }
         if (name === 'api_tip_enabled' || el.id === 'api-tip-toggle') {
@@ -530,11 +538,6 @@
 
                 try {
                     const formData = new FormData(settingsForm);
-                    const chkTrial = document.getElementById('chk_unlimited_trial');
-                    if (chkTrial && chkTrial.checked) {
-                        formData.set('default_trial_days', '0');
-                        formData.set('chk_unlimited_trial', '1');
-                    }
                     const chkCredits = document.getElementById('chk_unlimited_credits');
                     if (chkCredits && chkCredits.checked) {
                         formData.set('default_initial_credits', '-1');

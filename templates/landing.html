@@ -53,11 +53,11 @@
                     <h1 class="mt-7 text-4xl sm:text-5xl lg:text-6xl leading-[1.1] font-black tracking-[-.045em] text-slate-950">多平台媒体解析，<br><span class="text-brand">一个接口就够了。</span></h1>
                     <p class="mt-6 max-w-2xl text-lg leading-8 text-slate-600">输入任意支持平台的分享链接，统一获取视频、图集、封面、音频与作者信息。无需浏览器环境，既可在线使用，也可通过 API 接入你的业务。</p>
                     <div class="mt-8 flex flex-wrap items-center gap-4"><a href="#parser" class="rounded-xl bg-brand px-6 py-3 font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition">立即在线解析</a><a href="#docs" class="rounded-xl border border-slate-300 bg-white px-6 py-3 font-semibold text-slate-800 hover:border-indigo-300 hover:text-brand transition">查看 API 示例</a></div>
-                    <div class="mt-9 flex flex-wrap gap-x-7 gap-y-3 text-sm text-slate-500"><span class="inline-flex items-center gap-1.5">{{ icon('check', 'w-4 h-4 text-emerald-500') }}统一 JSON 返回</span><span class="inline-flex items-center gap-1.5">{{ icon('check', 'w-4 h-4 text-emerald-500') }}API Key 鉴权</span><span class="inline-flex items-center gap-1.5">{{ icon('check', 'w-4 h-4 text-emerald-500') }}独立 QPS 限制</span></div>
+                    <div class="mt-9 flex flex-wrap gap-x-7 gap-y-3 text-sm text-slate-500"><span class="inline-flex items-center gap-1.5">{{ icon('check', 'w-4 h-4 text-emerald-500') }}统一 JSON 返回</span><span class="inline-flex items-center gap-1.5">{{ icon('check', 'w-4 h-4 text-emerald-500') }}微信登录即用</span><span class="inline-flex items-center gap-1.5">{{ icon('check', 'w-4 h-4 text-emerald-500') }}每日额度自动重置</span></div>
                 </div>
                 <div class="code-shadow rounded-2xl overflow-hidden border border-slate-200 bg-white">
-                    <div class="h-12 px-4 flex items-center justify-between border-b border-slate-200 bg-slate-50"><div class="flex gap-2"><span class="w-3 h-3 rounded-full bg-red-400"></span><span class="w-3 h-3 rounded-full bg-amber-400"></span><span class="w-3 h-3 rounded-full bg-emerald-400"></span></div><span class="text-xs text-slate-500 font-mono">GET /api/v1/parse</span></div>
-                    <div class="p-6 sm:p-7 font-mono text-sm leading-7 overflow-x-auto custom-scroll text-slate-700"><div><span class="text-violet-700">curl</span> <span class="text-slate-500">--get</span> <span class="text-emerald-700">'https://your-domain.com/api/v1/parse'</span> \</div><div class="pl-4"><span class="text-slate-500">--header</span> <span class="text-emerald-700">'Authorization: Bearer mp-xxx'</span> \</div><div class="pl-4"><span class="text-slate-500">--data-urlencode</span> <span class="text-emerald-700">'url=https://v.douyin.com/xxx/'</span></div><div class="my-5 border-t border-slate-200"></div><div class="text-slate-400">{</div><div class="pl-4"><span class="text-sky-700">"succ"</span>: <span class="text-indigo-700">true</span>,</div><div class="pl-4"><span class="text-sky-700">"data"</span>: {</div><div class="pl-8"><span class="text-sky-700">"platform"</span>: <span class="text-emerald-700">"抖音"</span>,</div><div class="pl-8"><span class="text-sky-700">"video_url"</span>: <span class="text-emerald-700">"https://..."</span>,</div><div class="pl-8"><span class="text-sky-700">"image_list"</span>: []</div><div class="pl-4">}</div><div class="text-slate-400">}</div></div>
+                    <div class="h-12 px-4 flex items-center justify-between border-b border-slate-200 bg-slate-50"><div class="flex gap-2"><span class="w-3 h-3 rounded-full bg-red-400"></span><span class="w-3 h-3 rounded-full bg-amber-400"></span><span class="w-3 h-3 rounded-full bg-emerald-400"></span></div><span class="text-xs text-slate-500 font-mono">POST /api/v1/parse</span></div>
+                    <div class="p-6 sm:p-7 font-mono text-sm leading-7 overflow-x-auto custom-scroll text-slate-700"><div><span class="text-slate-500"># 微信登录后取得 X-WX-Token，随请求带上</span></div><div><span class="text-violet-700">curl</span> <span class="text-slate-500">-X POST</span> <span class="text-emerald-700">'https://your-domain.com/api/v1/parse'</span> \</div><div class="pl-4"><span class="text-slate-500">--header</span> <span class="text-emerald-700">'X-WX-Token: &lt;登录令牌&gt;'</span> \</div><div class="pl-4"><span class="text-slate-500">--header</span> <span class="text-emerald-700">'Content-Type: application/json'</span> \</div><div class="pl-4"><span class="text-slate-500">--data</span> <span class="text-emerald-700">'&#123;"url":"https://v.douyin.com/xxx/"&#125;'</span></div><div class="my-5 border-t border-slate-200"></div><div class="text-slate-400">{</div><div class="pl-4"><span class="text-sky-700">"succ"</span>: <span class="text-indigo-700">true</span>,</div><div class="pl-4"><span class="text-sky-700">"data"</span>: {</div><div class="pl-8"><span class="text-sky-700">"platform"</span>: <span class="text-emerald-700">"抖音"</span>,</div><div class="pl-8"><span class="text-sky-700">"video_url"</span>: <span class="text-emerald-700">"https://..."</span>,</div><div class="pl-8"><span class="text-sky-700">"image_list"</span>: []</div><div class="pl-4">}</div><div class="text-slate-400">}</div></div>
                 </div>
             </div>
         </section>
@@ -232,7 +232,7 @@
         </div>
 
         <section id="capabilities" class="max-w-7xl mx-auto px-5 sm:px-8 py-20"><div class="grid lg:grid-cols-[.7fr_1.3fr] gap-12 items-start"><div class="lg:sticky lg:top-28"><p class="font-mono text-sm font-semibold text-brand">ONE ENDPOINT</p><h2 class="mt-3 text-3xl sm:text-4xl font-bold text-slate-950">面向真实业务的解析能力</h2><p class="mt-4 text-slate-600 leading-7">解析器按平台独立维护，对外保持一致的数据结构。后台可随时关闭异常平台，不影响其他接口。</p></div><div class="grid sm:grid-cols-2 gap-4">
-            {% for number,title,description in [('01','多类型媒体','统一获取视频、图集、Live Photo、背景音频、封面及字幕。'),('02','密钥与限流','每位客户独立管理 API Key，支持用户级、密钥级和平台级 QPS。'),('03','状态可控制','管理员可控制全局服务和单个平台，并配置客户有效期。'),('04','调用可追踪','记录平台、响应状态、错误码和耗时，快速定位解析异常。')] %}<article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div class="text-brand font-mono font-semibold">{{ number }}</div><h3 class="mt-8 text-xl font-bold text-slate-950">{{ title }}</h3><p class="mt-3 text-slate-600 leading-7">{{ description }}</p></article>{% endfor %}
+            {% for number,title,description in [('01','多类型媒体','统一获取视频、图集、Live Photo、背景音频、封面及字幕。'),('02','额度与限流','每日额度按北京自然日重置，用尽后自动接续签到余额，支持用户级与平台级 QPS。'),('03','状态可控制','管理员可控制全局服务和单个平台，并给用户开通会员卡与调整每日额度。'),('04','调用可追踪','记录平台、响应状态、错误码和耗时，快速定位解析异常。')] %}<article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><div class="text-brand font-mono font-semibold">{{ number }}</div><h3 class="mt-8 text-xl font-bold text-slate-950">{{ title }}</h3><p class="mt-3 text-slate-600 leading-7">{{ description }}</p></article>{% endfor %}
         </section>
 
         <!-- 开源使用与部署方式 -->
@@ -277,8 +277,8 @@
                             </div>
                             <div class="my-6 border-t border-slate-100"></div>
                             <ul class="space-y-3.5 text-sm text-slate-600">
-                                <li class="flex items-center gap-3"><svg class="w-4 h-4 text-brand shrink-0 fill-current" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg><span>租户、API Key、有效期与积分体系</span></li>
-                                <li class="flex items-center gap-3"><svg class="w-4 h-4 text-brand shrink-0 fill-current" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg><span>用户 / 密钥 / 平台三级精细化流控</span></li>
+                                <li class="flex items-center gap-3"><svg class="w-4 h-4 text-brand shrink-0 fill-current" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg><span>用户、会员卡、每日额度与签到余额体系</span></li>
+                                <li class="flex items-center gap-3"><svg class="w-4 h-4 text-brand shrink-0 fill-current" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg><span>用户 / 平台两级精细化流控</span></li>
                                 <li class="flex items-center gap-3"><svg class="w-4 h-4 text-brand shrink-0 fill-current" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg><span>平台熔断开关、调用日志与用量统计</span></li>
                             </ul>
                         </div>
@@ -308,7 +308,7 @@
             </div>
         </section>
 
-        <section id="docs" class="border-t border-slate-200 bg-slate-50"><div class="max-w-7xl mx-auto px-5 sm:px-8 py-20 grid lg:grid-cols-2 gap-12 items-center"><div><p class="font-mono text-sm font-semibold text-brand">QUICK START</p><h2 class="mt-3 text-3xl sm:text-4xl font-bold text-slate-950">GET 接口，小白也能用</h2><p class="mt-4 text-slate-600 leading-7">注册并由管理员开通有效期后，在控制台创建 API Key。推荐使用请求头传递密钥，也兼容直接放入查询参数。</p><div class="mt-7 flex gap-3"><a href="{{ url_for('auth.register') }}" class="rounded-xl bg-brand px-5 py-3 font-bold text-white">注册账号</a><a href="{{ url_for('auth.login') }}" class="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-800">进入控制台</a></div></div><div class="rounded-2xl border border-slate-200 bg-white p-6 font-mono text-sm leading-7 overflow-x-auto custom-scroll shadow-sm"><p class="text-slate-500"># 最简单的 URL 调用方式</p><p class="mt-2 whitespace-nowrap"><span class="text-sky-700">GET</span> /api/v1/parse?<span class="text-brand">key</span>=mp-xxx&amp;<span class="text-brand">url</span>=分享链接</p><div class="my-5 border-t border-slate-200"></div><p class="text-slate-500"># 推荐：密钥放在请求头</p><p class="mt-2 text-emerald-700">Authorization: Bearer mp-xxx</p></div></div></section>
+        <section id="docs" class="border-t border-slate-200 bg-slate-50"><div class="max-w-7xl mx-auto px-5 sm:px-8 py-20 grid lg:grid-cols-2 gap-12 items-center"><div><p class="font-mono text-sm font-semibold text-brand">QUICK START</p><h2 class="mt-3 text-3xl sm:text-4xl font-bold text-slate-950">粘贴分享链接就能用</h2><p class="mt-4 text-slate-600 leading-7">无需注册、无需配置。在微信中登录后粘贴分享链接即可解析，每日额度自动重置，签到还能再攒次数。</p><div class="mt-7 flex gap-3"><a href="#parser" class="rounded-xl bg-brand px-5 py-3 font-bold text-white">立即在线解析</a><a href="{{ url_for('auth.login') }}" class="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-800">管理入口</a></div></div><div class="rounded-2xl border border-slate-200 bg-white p-6 font-mono text-sm leading-7 overflow-x-auto custom-scroll shadow-sm"><p class="text-slate-500"># 使用步骤</p><p class="mt-2"><span class="text-sky-700">1.</span> 在微信中登录应用</p><p><span class="text-sky-700">2.</span> 复制作品分享链接（或整段分享文案）</p><p><span class="text-sky-700">3.</span> 回到首页粘贴，点击解析</p><p><span class="text-sky-700">4.</span> 在结果页保存视频或图片</p><div class="my-5 border-t border-slate-200"></div><p class="text-slate-500"># 每日额度用完后</p><p class="mt-2 text-emerald-700">每日签到可继续攒次数</p></div></div></section>
 
         <!-- 常见问题 FAQ 板块 -->
         <section id="faq" class="border-t border-slate-200 bg-white">
@@ -358,13 +358,13 @@
 
                     <details class="group rounded-2xl border border-slate-200 bg-slate-50/50 p-6 [&_summary::-webkit-details-marker]:hidden transition-all duration-200 hover:border-indigo-200 hover:bg-white">
                         <summary class="flex items-center justify-between cursor-pointer font-bold text-slate-900 text-lg">
-                            <span>如何获取和配置 API Key？</span>
+                            <span>接口怎么接入？需要自己配置密钥吗？</span>
                             <span class="ml-4 shrink-0 rounded-full bg-slate-100 p-1.5 text-slate-500 group-open:-rotate-180 group-open:bg-indigo-50 group-open:text-brand transition-all duration-200">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                             </span>
                         </summary>
                         <p class="mt-4 text-slate-600 leading-7 text-sm sm:text-base border-t border-slate-100 pt-4">
-                            自部署后，首次访问 <code class="font-mono text-sm">/auth/setup</code> 创建管理员。用户登录控制台后可以创建和管理自己的 API Key；调用接口时推荐使用 <code class="font-mono text-sm">Authorization: Bearer mp-xxx</code>，也兼容 <code class="font-mono text-sm">?key=mp-xxx</code> 查询参数。
+                            不需要。用户微信登录后由服务端签发登录令牌，客户端自动携带 <code class="font-mono text-sm">X-WX-Token</code>，用户无需接触任何密钥。自部署后首次访问 <code class="font-mono text-sm">/auth/setup</code> 创建管理员；管理员在后台给用户开通会员卡、调整每日额度与签到赠送次数。
                         </p>
                     </details>
 
@@ -376,7 +376,7 @@
                             </span>
                         </summary>
                         <p class="mt-4 text-slate-600 leading-7 text-sm sm:text-base border-t border-slate-100 pt-4">
-                            这些限制均由自部署实例的管理员配置，并非固定商业套餐。默认新用户试用期为 7 天、初始积分为 100、账号限制为 2 QPS；管理员可在后台调整。触发 QPS 限制时返回 429，积分耗尽时返回 402，账号未开通或过期时返回 403。
+                            这些限制均由自部署实例的管理员配置，并非固定商业套餐：新用户的试用期、初始积分与账号 QPS 都能在后台调整。触发 QPS 限制时返回 429，积分耗尽时返回 402，账号未开通或过期时返回 403。
                         </p>
                     </details>
                 </div>
@@ -1074,7 +1074,7 @@
                 return {
                     title: '体验频率受限',
                     message: '为保障公共演示体验稳定，首页在线体验已达到短时频控上限。',
-                    hint: '请稍候 1 分钟后再试；或注册账号获取专属 API Key 进行调用。',
+                    hint: '请稍候 1 分钟后再试；登录后不受这条公共体验频控限制。',
                     tag: '频控限制'
                 };
             }

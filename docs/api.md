@@ -10,18 +10,32 @@
 * **支持格式**：`application/json` 或 `application/x-www-form-urlencoded`
 * **字符编码**：`UTF-8`
 
-### 1.1 鉴权方式 (API Key)
-在标准模式下（`API_ONLY=false`），接口需要鉴权，支持以下两种传参方式：
-1. **HTTP 请求头 (推荐)**：
-   ```http
-   Authorization: Bearer YOUR_API_KEY
-   ```
-2. **Query 参数 (备用)**：
-   ```http
-   POST /api/v1/parse?key=YOUR_API_KEY
-   ```
+### 1.1 鉴权方式 (微信登录令牌)
 
-> 💡 **微服务模式说明**：若配置了环境变量 `API_ONLY=true`，系统将作为纯解析引擎运行，`/api/v1/parse` 与 `/api/parse` 自动变为完全免鉴权接口，无需传入任何 API Key，亦不记录数据库请求日志。
+> 🔄 **2026-09-22 修订**：本节原先写作「鉴权方式 (API Key)」，支持 `Authorization: Bearer <API Key>` 与 `?key=<API Key>` 两种传参。
+> 该通道**已整体撤销**。原因见 §1.1.1。**现只有一种鉴权方式**。
+
+在标准模式下（`API_ONLY=false`），`/api/v1/parse` 需要携带小程序登录令牌：
+
+```http
+X-WX-Token: <wx.login() 后由 /wx/login 签发的登录令牌>
+```
+
+令牌由 `POST /api/wx/login` 用 `wx.login()` 拿到的 `code` 换取（见 `docs/wx-login.md`），客户端**自动携带**，用户不需要接触任何凭证。
+
+#### 1.1.1 为什么没有 API Key 通道了
+
+原设计是「注册即自取、客户自己管理」的密钥形态。它的致命处不在密钥本身，而在**注册接口是开放的**（`/register`，`registration_enabled=1`），且注册即送 `default_initial_credits=100` 积分 + `default_trial_days=365` 天。两者相乘的结果是：
+
+> **任何陌生人都能自行注册一个账号、自取一把密钥，从而拿到一条免费解析通道。**
+
+小程序从头到尾走 `X-WX-Token`，**从不使用**密钥通道 —— 全库也只有 1 把密钥（管理员自用测试）。因此撤销它不打断任何外部客户。
+
+`api_keys` **表保留不删**：`request_logs` 里 1641 行历史记录的 `api_key_id` 指着它，删表会让历史日志失去归属。保留的意思是「不再读写、不再展示」，不是「数据还有意义」。
+
+若日后确实要给白名单客户开程序化通道，正确形态是重做一套**发证制**凭证（管理员签发、客户不可自助注册），而不是把这套自助注册的密钥复活。
+
+> 💡 **微服务模式说明**：若配置了环境变量 `API_ONLY=true`，系统将作为纯解析引擎运行，`/api/v1/parse` 与 `/api/parse` 自动变为完全免鉴权接口，无需携带任何令牌，亦不记录数据库请求日志。这是**唯一**无需凭证的入口。
 
 ---
 
@@ -35,11 +49,13 @@
 ```bash
 curl -X POST "http://localhost:5000/api/v1/parse" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer mp-xxxxxx" \
+  -H "X-WX-Token: <登录令牌>" \
   -d '{
     "text": "7.22 复制打开抖音，看看【测试的作品】https://v.douyin.com/iLxxxx/"
   }'
 ```
+
+> ⚠️ 网页版的在线体验走的是 `/api/parse`（不是 `/api/v1/parse`），由管理员开关 `demo_enabled` 控制、按 IP 频控，**不需要令牌**。
 
 ---
 
@@ -146,13 +162,13 @@ curl -X POST "http://localhost:5000/api/v1/parse" \
 | **400** | `URL_NOT_FOUND` | `未找到有效的分享链接` | 文本中未能提取到有效的 HTTP/HTTPS URL |
 | **400** | `REDIRECT_FAILED` | `无法访问或识别该分享链接` | 短链接 302 重定向失败或网络不通 |
 | **400** | `PLATFORM_NOT_SUPPORTED` | `该链接尚未支持提取` | 暂未支持解析的域名平台 |
-| **401** | `API_KEY_REQUIRED` | `请提供 API Key` | 缺少 Authorization 鉴权头 |
-| **401** | `INVALID_API_KEY` | `API Key 无效` | Key 不存在或已被废弃 |
-| **402** | `INSUFFICIENT_CREDITS` | `账号解析积分已耗尽，请联系管理员充值` | 当前用户积分余额不足 |
-| **403** | `API_KEY_DISABLED` | `API Key 或账号已停用` | 当前账号或 Key 处于停用状态 |
-| **403** | `ACCOUNT_EXPIRED` | `账号尚未开通或已到期` | 账号有效期已过 |
+| **401** | `WX_TOKEN_REQUIRED` | `请先登录小程序` | 完全没有 `X-WX-Token` 头。**去登录**（`API_ONLY=true` 时不会出现） |
+| **401** | `WX_TOKEN_INVALID` | `登录状态无效，请重新登录` | 令牌不存在或已失效。**清缓存重登** |
+| **401** | `WX_TOKEN_EXPIRED` | `登录状态已过期，请重新登录` | 令牌超期（`wx_token_ttl_days`）。**重新静默登录** |
+| **402** | `DAILY_QUOTA_EXCEEDED` | `今日额度已用完，可签到或开通会员获取更多` | 当日额度**与签到余额都**已用尽。⚠️ 只在**两层都空**时出现 |
+| **403** | `ACCOUNT_DISABLED` | `账号已被停用` | 该用户被管理员停用 |
 | **403** | `DEMO_DISABLED` | `在线体验暂未开放` | 管理员关闭了未登录前台体验 |
-| **429** | `RATE_LIMITED` | `请求过于频繁，当前账号限制为 {N} QPS` | 超出当前账号或 Key 的 QPS 上限 |
+| **429** | `RATE_LIMITED` | `请求过于频繁，当前账号限制为 {N} QPS` | 超出该账号的 QPS 上限（按用户计，与其令牌无关） |
 | **429** | `PLATFORM_RATE_LIMITED` | `{platform} 接口请求过于频繁` | 超出该平台被单独设定的 QPS 上限 |
 | **503** | `API_DISABLED` | `API 服务已暂停` | 全局维护中 |
 | **503** | `PLATFORM_DISABLED` | `{platform} 接口维护中` | 该平台在管理后台被单独禁用 |

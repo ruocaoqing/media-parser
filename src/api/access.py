@@ -1,12 +1,12 @@
+import hashlib
 import random
 import re
 import sys
 import time
 
-from flask import current_app, has_app_context, request, session
+from flask import current_app, has_app_context, request
 
-from src.auth import hash_api_key, legacy_hash_api_key, user_is_expired
-from src.db import get_db, setting, transaction, utcnow
+from src.db import daily_quota_cap, get_db, setting, transaction, utcnow
 
 
 class SQLiteRateLimiter:
@@ -103,48 +103,63 @@ def get_client_ip():
     return request.remote_addr or "127.0.0.1"
 
 
-def authenticate_api_key():
-    if current_app and current_app.config.get("API_ONLY"):
+# 2026-09-22 移除：`authenticate_api_key()` 整体撤销（用户决定「服务端认证一并停用」）。
+# 原实现按 Authorization: Bearer <API Key>（或 ?key=）查 api_keys 行，再查停用/有效期/积分三态。
+# 撤销理由与善后：
+#   * 这套凭证是「注册即可自取、客户自己管理」的形态，而注册送 100 积分 + 365 天试用，
+#     等于任何陌生人都能拿到一条免费解析通道（docs/wx-login.md §6.2 称之为无人维护的授权入口）。
+#   * 小程序从头到尾走 X-WX-Token，从不使用它 —— 全库仅 1 把密钥（管理员自用测试），
+#     所以撤销不打断任何外部客户。
+#   * `api_keys` 表**保留不删**：request_logs 里 1641 行历史记录的 api_key_id 指着它，
+#     删表会让历史日志失去归属。保留的意思是「不再读写不再展示」，不是「数据还存在意义」。
+# 若日后确实需要给白名单客户开程序化通道，正确形态是重做一套**发证制**凭证，
+# 而不是把这套自助注册的密钥复活。
+
+
+def authenticate_wx_token():
+    """校验小程序登录令牌。
+
+    返回三态：
+      (access, None) —— 令牌合法，access 形如 {"user_id": int, "id": None, "wx": True, "quota_cap": int|None}
+      (None, error)  —— 令牌存在但不合法（调用方直接返回该错误）
+      (None, None)   —— **没有 X-WX-Token 头**。这不是"换条路试试"，而是"没出示凭证"；
+                        撤销密钥通道后调用方应据此返回 401（API_ONLY 模式除外）
+    """
+    token = request.headers.get("X-WX-Token", "").strip()
+    if not token:
         return None, None
-    authorization = request.headers.get("Authorization", "")
-    raw_key = authorization[7:].strip() if authorization.lower().startswith("bearer ") else request.args.get("key", "").strip()
-    if not raw_key:
-        return None, (401, "请提供 API Key", "API_KEY_REQUIRED")
+
     db = get_db()
     row = db.execute(
-        "SELECT k.*, u.username, u.role, u.active user_active, u.expires_at, u.qps_limit user_qps, u.credits user_credits "
-        "FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.key=?",
-        (raw_key,),
+        "SELECT s.token_hash, s.expires_at AS session_expires_at, u.* "
+        "FROM wx_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?",
+        (hashlib.sha256(token.encode("utf-8")).hexdigest(),),
     ).fetchone()
     if row is None:
-        user_id = session.get("user_id")
-        if user_id:
-            clean_prefix = raw_key.rstrip(".").rstrip("•").strip()
-            if clean_prefix:
-                row = db.execute(
-                    "SELECT k.*, u.username, u.role, u.active user_active, u.expires_at, u.qps_limit user_qps, u.credits user_credits "
-                    "FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.user_id=? AND (k.key LIKE ?)",
-                    (user_id, f"{clean_prefix}%"),
-                ).fetchone()
-    if row is None:
-        return None, (401, "API Key 无效", "INVALID_API_KEY")
-    if not row["active"] or not row["user_active"]:
-        return None, (403, "API Key 或账号已停用", "API_KEY_DISABLED")
-    if user_is_expired(row):
-        return None, (403, "账号尚未开通或已到期", "ACCOUNT_EXPIRED")
-    if row["role"] != "admin" and row["user_credits"] is not None and row["user_credits"] != -1 and row["user_credits"] <= 0:
-        return None, (402, "账号解析积分已耗尽，请联系管理员充值", "INSUFFICIENT_CREDITS")
-    limits = [(f"user:{row['user_id']}", row["user_qps"], 1)]
-    if row["qps_limit"]:
-        limits.append((f"key:{row['id']}", row["qps_limit"], 1))
+        return None, (401, "登录状态无效，请重新登录", "WX_TOKEN_INVALID")
+    if str(row["session_expires_at"]) <= utcnow():
+        return None, (401, "登录状态已过期，请重新登录", "WX_TOKEN_EXPIRED")
+    # 三道检查（§2.5）：停用必须查
+    if not row["active"]:
+        return None, (403, "账号已被停用", "ACCOUNT_DISABLED")
+    # 第二道检查换成每日额度 + 签到余额两层 —— 在 _execute_parse 里做（那里才知道今天用量）
+    # 第四道：限流主体是 user:{id}。撤销密钥通道后不再有第二个主体，
+    # 但**主体名逐字保持不变** —— 改名的代价是限流桶换键，老桶里的计数当场失效，
+    # 而原名没有任何坏处。
+    limits = [(f"user:{row['id']}", row["qps_limit"], 1)]
     exceeded = consume_rate_limits(limits)
     if exceeded:
-        subject, limit = exceeded
-        level = "账号" if subject.startswith("user:") else "API Key"
-        return None, (429, f"请求过于频繁，当前{level}限制为 {limit} QPS", "RATE_LIMITED")
-    db.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (utcnow(), row["id"]))
+        return None, (429, f"请求过于频繁，当前账号限制为 {row['qps_limit']} QPS", "RATE_LIMITED")
+
+    db.execute("UPDATE wx_sessions SET last_seen_at=? WHERE token_hash=?",
+               (utcnow(), row["token_hash"]))
     db.commit()
-    return row, None
+    return {
+        "user_id": row["id"],
+        "id": None,                      # 小程序用户没有密钥行，日志里 api_key_id 恒为 NULL
+        "wx": True,
+        "quota_cap": None if row["role"] == "admin" else daily_quota_cap(row),
+    }, None
 
 
 def platform_access(platform):

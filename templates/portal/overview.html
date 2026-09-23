@@ -2,11 +2,11 @@
 {% block title %}数据概览 · 客户控制台{% endblock %}
 {% block page_title %}概览{% endblock %}
 {% block console_content %}
-<main class="max-w-7xl mx-auto space-y-6">
-    {% if user_is_expired(g.user) %}
+<main class="space-y-6">
+    {% if not g.user['active'] %}
     <div class="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-2">
         <svg class="w-4 h-4 text-red-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <span>当前账号尚未配置有效期或已经到期，请联系管理员开通。您仍可登录并查看历史记录。</span>
+        <span>当前账号已被停用，接口解析会返回 403，请联系管理员。您仍可登录并查看历史记录。</span>
     </div>
     {% endif %}
 
@@ -18,17 +18,11 @@
                 <p class="text-xs text-slate-500 mt-1">实时监控您的接口调取概况与账号限量。</p>
             </div>
             <div class="flex items-center gap-3 flex-wrap">
-                <span class="text-xs text-slate-500">
-                    {% if g.user['role'] == 'admin' or not g.user['expires_at'] %}
-                    权限：<strong class="text-slate-900 font-bold">永久有效</strong>
-                    {% elif user_is_expired(g.user) %}
-                    到期时间：<strong class="text-red-600 font-bold">{{ format_user_expiry(g.user) }}</strong>
-                    {% else %}
-                    有效期至：<strong class="text-slate-900 font-bold">{{ format_user_expiry(g.user) }}</strong>
-                    {% endif %}
-                </span>
-                <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold {{ 'bg-red-50 text-red-700 border border-red-200' if user_is_expired(g.user) else 'bg-emerald-50 text-emerald-700 border border-emerald-200' }}">
-                    {{ '已到期' if user_is_expired(g.user) else '服务有效' }}
+                {# 账号状态只有一个字段active。2026-09-22 起 users.expires_at 已废弃，
+                   原「有效期至 / 已到期」两件套没有任何一类账号能用到（管理员不算，
+                   而普通账号的 expires_at 一直是 NULL）。 #}
+                <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold {{ 'bg-emerald-50 text-emerald-700 border border-emerald-200' if g.user['active'] else 'bg-red-50 text-red-700 border border-red-200' }}">
+                    {{ '正常' if g.user['active'] else '已停用' }}
                 </span>
             </div>
         </div>
@@ -153,9 +147,10 @@
             </div>
         </div>
 
-        <!-- 下方双栏：平台使用分布（左） + 密钥解析活跃榜 Top 10（右） -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <!-- 左侧：平台使用分布 -->
+        <!-- 平台使用分布。2026-09-22：原先是"左平台分布 + 右密钥活跃榜"的双栏，
+             密钥撤销后右栏没有内容可放，故收成单栏 —— 留着 lg:grid-cols-2 会让这张卡
+             只占一半宽度、右边半屏空白。 -->
+        <div class="grid grid-cols-1 gap-6">
             <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
                 <div class="mb-5">
                     <h2 class="text-base font-bold text-slate-900">平台使用分布</h2>
@@ -215,44 +210,6 @@
                 {% endif %}
             </div>
 
-            <!-- 右侧：密钥调取活跃榜 Top 10 -->
-            <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
-                <div class="mb-5">
-                    <h2 class="text-base font-bold text-slate-900">密钥调取活跃榜 (Top 10)</h2>
-                    <p class="text-xs text-slate-500 mt-0.5">
-                        {% if current_days == 0 %}全部历史调用量最高的 API 密钥{% else %}近 {{ current_days }} 天调用量最高的 API 密钥{% endif %}
-                    </p>
-                </div>
-
-                {% if not top_keys %}
-                <div class="text-center py-12 text-slate-400 text-xs">
-                    <svg class="w-10 h-10 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                    </svg>
-                    <div>暂无 API 密钥调用排行数据</div>
-                </div>
-                {% else %}
-                <div class="space-y-3.5">
-                    {% for item in top_keys %}
-                    <div class="space-y-1.5">
-                        <div class="flex items-center justify-between text-xs">
-                            <span class="flex items-center gap-2 font-semibold text-slate-800 truncate">
-                                <span class="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold {{ 'bg-amber-100 text-amber-800' if loop.index == 1 else ('bg-slate-200 text-slate-700' if loop.index <= 3 else 'bg-slate-100 text-slate-500') }}">
-                                    {{ loop.index }}
-                                </span>
-                                {{ item['name'] }} <span class="text-slate-400 font-mono text-[11px]">({{ item['key_prefix'] }}...)</span>
-                            </span>
-                            <span class="font-bold text-slate-900 shrink-0">{{ item['calls'] }} 次</span>
-                        </div>
-                        <div class="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
-                            <div class="h-full rounded-full bg-brand transition-all duration-500" style="width: {{ item['pct'] }}%"></div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
         </div>
     </div>
 </main>

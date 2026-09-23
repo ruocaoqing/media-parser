@@ -622,17 +622,6 @@ function submitBatchUserCredits() {
     executeBatchAction('users-table', '/admin/users/batch', 'adjust_credits', { credits_mode: mode, credits_amount: amount });
 }
 
-function submitBatchUserExpires() {
-    const expires = document.getElementById('batch-expires-date')?.value || '';
-    if (!expires) {
-        if (window.showToast) {
-            window.showToast('请选择到期日期！', 'warning');
-        }
-        return;
-    }
-    executeBatchAction('users-table', '/admin/users/batch', 'set_expires', { expires_at: expires });
-}
-
 function submitBatchUserQps() {
     const qps = document.getElementById('batch-user-qps-val')?.value || '2';
     executeBatchAction('users-table', '/admin/users/batch', 'set_qps', { qps_limit: qps });

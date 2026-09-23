@@ -1,8 +1,6 @@
 import sqlite3
 import unittest
 from datetime import datetime, timezone
-from src.auth import generate_api_key, hash_api_key
-from werkzeug.security import generate_password_hash
 
 
 class TestBatchOperationsDB(unittest.TestCase):
@@ -20,7 +18,6 @@ class TestBatchOperationsDB(unittest.TestCase):
                 active INTEGER NOT NULL DEFAULT 1,
                 qps_limit INTEGER NOT NULL DEFAULT 2,
                 credits INTEGER DEFAULT 100,
-                expires_at TEXT,
                 created_at TEXT NOT NULL
             )
         """)
@@ -66,12 +63,10 @@ class TestBatchOperationsDB(unittest.TestCase):
                 (f"user{i}", now),
             )
 
-        # Insert test keys
-        for i in range(1, 6):
-            self.db.execute(
-                "INSERT INTO api_keys (user_id, name, key, active, qps_limit, created_at) VALUES (?, ?, ?, 1, 5, ?)",
-                (i + 1, f"key{i}", f"mp-key-{i}-12345678901234567890", now),
-            )
+        # 2026-09-22：原先这里插 5 行 api_keys 供 `test_batch_keys_disable_and_qps` 用。
+        # 密钥通道撤销后那条测试删了，插入也一并删掉 —— 留着是"造数据给没人读的表看"。
+        # `CREATE TABLE api_keys` 保留：本 fixture 是照着真实 schema 搭的，表在真实库里也还在
+        #（历史日志的 api_key_id 指着它），留空表比留一张不存在的表更贴近真身。
 
         # Insert test logs
         for i in range(1, 10):
@@ -113,16 +108,6 @@ class TestBatchOperationsDB(unittest.TestCase):
 
         admin_exists = self.db.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0]
         self.assertEqual(admin_exists, 1)  # Admin should NOT be deleted!
-
-    def test_batch_keys_disable_and_qps(self):
-        key_ids = [1, 2]
-        placeholders = ",".join(["?"] * len(key_ids))
-        self.db.execute(f"UPDATE api_keys SET active=0, qps_limit=20 WHERE id IN ({placeholders})", key_ids)
-        self.db.commit()
-
-        k1 = self.db.execute("SELECT * FROM api_keys WHERE id=1").fetchone()
-        self.assertEqual(k1["active"], 0)
-        self.assertEqual(k1["qps_limit"], 20)
 
     def test_batch_logs_delete(self):
         log_ids = [1, 2, 3]

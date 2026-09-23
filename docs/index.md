@@ -13,6 +13,7 @@
 * 🏗️ **[系统架构与生命周期 (Architecture)](architecture.md)**：了解请求处理链路、302 跳转跟踪、ParserFactory 自动发现与双运行模式（SaaS vs 微服务）架构。
 * 🔍 **[通用逆向方法论 (Reverse Engineering Guide)](reverse-guide.md)**：掌握 SSR 数据提取、H5 接口伪装、JS 签名沙箱及抓包 SOP。
 * 🧪 **[测试与回归验证 (Testing Guide)](testing.md)**：学习 Pytest 单元测试、Mock 构造与真实样本（Live Samples）测试。
+* 🔐 **[小程序登录与账号体系 (WeChat Login Design)](wx-login.md)**：微信静默登录、服务端额度记账与会员判定、`/api/v1/parse` 双路鉴权，以及第二期虚拟支付的接入前提。
 * 📖 **平台实战指南 (Parser Guides)**：
   * **短视频与轻社区**：[抖音](parsers/douyin.md) ｜ [快手](parsers/kuaishou.md) ｜ [今日头条](parsers/toutiao.md) ｜ [西瓜视频](parsers/xigua.md) ｜ [皮皮虾](parsers/pipixia.md) ｜ [皮皮搞笑](parsers/pipigaoxiao.md) ｜ [最右](parsers/zuiyou.md) ｜ [美拍](parsers/meipai.md) ｜ [微视](parsers/weishi.md) ｜ [绿洲](parsers/lvzhou.md) ｜ [番茄小说/红果短剧/红果漫剧](parsers/fanqie.md)
   * **图文与综合社区**：[小红书](parsers/xiaohongshu.md) ｜ [微信公众号](parsers/wechat-mp.md) ｜ [微博](parsers/weibo.md) ｜ [知乎](parsers/zhihu.md) ｜ [闲鱼](parsers/xianyu.md) ｜ [Soul](parsers/soul.md) ｜ [得物](parsers/dewu.md) ｜ [网易LOFTER](parsers/lofter.md)

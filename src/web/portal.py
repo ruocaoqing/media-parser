@@ -3,22 +3,15 @@ from datetime import datetime, time, timezone
 import io
 from zoneinfo import ZoneInfo
 
-from flask import Blueprint, Response, flash, g, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, g, render_template, request
 
 from configs.general_constants import DOMAIN_TO_NAME
-from src.auth import csrf_protected, format_log_time, generate_api_key, hash_api_key, login_required, user_is_expired
-from src.db import get_daily_trend, get_db, get_platform_distribution, get_top_keys, utcnow
+from src.auth import format_log_time, login_required
+from src.db import get_daily_trend, get_db, get_platform_distribution
 from src.utils.table_query import paginate_memory_list, query_paginated_table
 
 
 bp = Blueprint("portal", __name__, url_prefix="/console")
-
-
-def _positive_page(value):
-    try:
-        return max(1, int(value))
-    except (TypeError, ValueError):
-        return 1
 
 
 def _parse_shanghai_to_utc_iso(val: str, is_end: bool = False) -> str | None:
@@ -61,238 +54,19 @@ def overview():
     ).fetchone()
     chart_data = get_daily_trend(user_id=g.user["id"], days=days)
     pie_data = get_platform_distribution(user_id=g.user["id"], days=days)
-    top_keys = get_top_keys(user_id=g.user["id"], days=days, limit=10)
 
     return render_template(
         "portal/overview.html",
         stats=stats,
         chart_data=chart_data,
         pie_data=pie_data,
-        top_keys=top_keys,
         current_days=days,
         active_nav="overview",
     )
 
 
 # ----------------------------------------------------------------------
-# 2. API 密钥 (Keys)
-# ----------------------------------------------------------------------
-
-@bp.get("/keys")
-@login_required
-def keys():
-    db = get_db()
-    keys_where, keys_params = ["k.user_id = ?"], [g.user["id"]]
-    if k_q := request.args.get("keys_q", request.args.get("q", "")).strip():
-        keys_where.append("k.name LIKE ?")
-        keys_params.append(f"%{k_q}%")
-    if k_active := request.args.get("keys_active", "").strip():
-        try:
-            val = int(k_active)
-            keys_where.append("k.active = ?")
-            keys_params.append(val)
-        except ValueError:
-            pass
-
-    keys_allowed_sorts = {
-        "id": "k.id",
-        "name": "k.name",
-        "created_at": "k.created_at",
-        "last_used_at": "k.last_used_at",
-        "active": "k.active",
-    }
-    keys_table = query_paginated_table(
-        db,
-        base_from_sql="api_keys k",
-        select_fields="k.*",
-        allowed_sorts=keys_allowed_sorts,
-        default_sort="id",
-        default_order="desc",
-        where_clauses=keys_where,
-        where_params=keys_params,
-        request_args=request.args,
-        default_page_size=20,
-        prefix="keys_",
-    )
-
-    return render_template(
-        "portal/keys.html",
-        keys=keys_table["items"],
-        keys_table=keys_table,
-        my_keys=keys_table["items"],
-        new_api_key=session.pop("new_api_key", None),
-        active_nav="keys",
-    )
-
-
-@bp.post("/keys/batch")
-@login_required
-@csrf_protected
-def batch_keys():
-    db = get_db()
-    action = request.form.get("action", "").strip()
-    select_mode = request.form.get("select_mode", "page").strip()
-
-    if not action:
-        flash("未指定批量操作类型", "error")
-        return redirect(url_for("portal.keys"))
-
-    if select_mode == "all":
-        keys_where = ["user_id = ?"]
-        keys_params = [g.user["id"]]
-        if k_q := (request.form.get("keys_q") or request.form.get("q") or "").strip():
-            keys_where.append("name LIKE ?")
-            keys_params.append(f"%{k_q}%")
-        if k_active := (request.form.get("keys_active") or request.form.get("active") or "").strip():
-            try:
-                val = int(k_active)
-                keys_where.append("active = ?")
-                keys_params.append(val)
-            except ValueError:
-                pass
-
-        where_sql = " WHERE " + " AND ".join(keys_where)
-        matched_count = db.execute(f"SELECT COUNT(*) as c FROM api_keys{where_sql}", keys_params).fetchone()["c"]
-
-        if action == "enable":
-            db.execute(f"UPDATE api_keys SET active=1{where_sql}", keys_params)
-            flash(f"已批量启用符合筛选条件的全部 {matched_count} 个 API Key", "success")
-        elif action == "disable":
-            db.execute(f"UPDATE api_keys SET active=0{where_sql}", keys_params)
-            flash(f"已批量停用符合筛选条件的全部 {matched_count} 个 API Key", "success")
-        elif action == "delete":
-            db.execute(f"DELETE FROM api_keys{where_sql}", keys_params)
-            flash(f"已批量删除符合筛选条件的全部 {matched_count} 个 API Key", "success")
-        else:
-            flash("不支持的批量操作类型", "error")
-            return redirect(url_for("portal.keys"))
-
-        db.commit()
-        return redirect(url_for("portal.keys"))
-
-    ids_raw = request.form.get("ids", "").strip()
-    if not ids_raw:
-        flash("请先勾选需要批量操作的 API Key", "error")
-        return redirect(url_for("portal.keys"))
-
-    try:
-        key_ids = [int(i.strip()) for i in ids_raw.split(",") if i.strip().isdigit()]
-    except ValueError:
-        key_ids = []
-
-    if not key_ids:
-        flash("未获取到有效的密钥 ID 列表", "error")
-        return redirect(url_for("portal.keys"))
-
-    placeholders = ",".join(["?"] * len(key_ids))
-
-    if action == "enable":
-        db.execute(f"UPDATE api_keys SET active=1 WHERE id IN ({placeholders}) AND user_id=?", key_ids + [g.user["id"]])
-        flash(f"已批量启用选中的 {len(key_ids)} 个 API Key", "success")
-    elif action == "disable":
-        db.execute(f"UPDATE api_keys SET active=0 WHERE id IN ({placeholders}) AND user_id=?", key_ids + [g.user["id"]])
-        flash(f"已批量停用选中的 {len(key_ids)} 个 API Key", "success")
-    elif action == "delete":
-        db.execute(f"DELETE FROM api_keys WHERE id IN ({placeholders}) AND user_id=?", key_ids + [g.user["id"]])
-        flash(f"已批量删除选中的 {len(key_ids)} 个 API Key", "success")
-    else:
-        flash("不支持的批量操作类型", "error")
-        return redirect(url_for("portal.keys"))
-
-    db.commit()
-    return redirect(url_for("portal.keys"))
-
-
-@bp.post("/keys")
-@login_required
-@csrf_protected
-def create_key():
-    if user_is_expired(g.user):
-        flash("账号尚未开通或已到期，不能创建密钥", "error")
-        return redirect(url_for("portal.keys"))
-    name = request.form.get("name", "").strip()[:40] or "默认密钥"
-    count = get_db().execute(
-        "SELECT COUNT(*) count FROM api_keys WHERE user_id=?", (g.user["id"],)
-    ).fetchone()["count"]
-    if count >= 10:
-        flash("每个账号最多创建 10 个密钥", "error")
-        return redirect(url_for("portal.keys"))
-    raw_key = generate_api_key()
-    db = get_db()
-    db.execute(
-        "INSERT INTO api_keys(user_id, name, key, created_at) VALUES(?,?,?,?)",
-        (g.user["id"], name, raw_key, utcnow()),
-    )
-    db.commit()
-    session["new_api_key"] = raw_key
-    flash("密钥创建成功！您可在列表中点击“小眼睛”或“一键复制”随时使用。", "success")
-    return redirect(url_for("portal.keys"))
-
-
-@bp.post("/keys/<int:key_id>/toggle")
-@login_required
-@csrf_protected
-def toggle_key(key_id):
-    db = get_db()
-    db.execute(
-        "UPDATE api_keys SET active = CASE active WHEN 1 THEN 0 ELSE 1 END WHERE id=? AND user_id=?",
-        (key_id, g.user["id"]),
-    )
-    db.commit()
-    flash("密钥状态已更新", "success")
-    return redirect(url_for("portal.keys"))
-
-
-@bp.post("/keys/<int:key_id>/update")
-@login_required
-@csrf_protected
-def update_key(key_id):
-    name = request.form.get("name", "").strip()[:40]
-    if not name:
-        flash("密钥名称不能为空", "error")
-        return redirect(url_for("portal.keys"))
-    db = get_db()
-    db.execute(
-        "UPDATE api_keys SET name=? WHERE id=? AND user_id=?",
-        (name, key_id, g.user["id"]),
-    )
-    db.commit()
-    flash("密钥名称已成功修改", "success")
-    return redirect(url_for("portal.keys"))
-
-
-@bp.post("/keys/<int:key_id>/delete")
-@login_required
-@csrf_protected
-def delete_key(key_id):
-    db = get_db()
-    db.execute("DELETE FROM api_keys WHERE id=? AND user_id=?", (key_id, g.user["id"]))
-    db.commit()
-    flash("密钥已删除，相关调用日志会保留", "success")
-    return redirect(url_for("portal.keys"))
-
-
-# ----------------------------------------------------------------------
-# 3. 开发者文档 (Docs)
-# ----------------------------------------------------------------------
-
-@bp.get("/docs")
-@login_required
-def docs():
-    db = get_db()
-    keys_list = db.execute(
-        "SELECT * FROM api_keys WHERE user_id=? ORDER BY id DESC", (g.user["id"],)
-    ).fetchall()
-    return render_template(
-        "portal/docs.html",
-        keys=keys_list,
-        my_keys=keys_list,
-        active_nav="docs",
-    )
-
-
-# ----------------------------------------------------------------------
-# 4. 支持平台 (Platforms)
+# 2. 支持平台 (Platforms)
 # ----------------------------------------------------------------------
 
 @bp.get("/platforms")
@@ -386,7 +160,7 @@ def platforms():
 
 
 # ----------------------------------------------------------------------
-# 4. 请求日志 (Logs)
+# 3. 请求日志 (Logs)
 # ----------------------------------------------------------------------
 
 @bp.get("/logs")
@@ -395,8 +169,8 @@ def logs():
     db = get_db()
     logs_where, logs_params = ["l.user_id = ?"], [g.user["id"]]
     if l_q := request.args.get("logs_q", request.args.get("q", "")).strip():
-        logs_where.append("(l.input_url LIKE ? OR l.error_code LIKE ? OR k.name LIKE ?)")
-        logs_params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
+        logs_where.append("(l.input_url LIKE ? OR l.error_code LIKE ?)")
+        logs_params.extend([f"%{l_q}%", f"%{l_q}%"])
     if l_status := request.args.get("logs_status", request.args.get("status_code", "")).strip():
         if l_status == "200":
             logs_where.append("l.status_code < 400")
@@ -429,8 +203,8 @@ def logs():
 
     logs_table = query_paginated_table(
         db,
-        base_from_sql="request_logs l LEFT JOIN api_keys k ON k.id=l.api_key_id",
-        select_fields="l.*, k.key, k.name as key_name",
+        base_from_sql="request_logs l",
+        select_fields="l.*",
         allowed_sorts=logs_allowed_sorts,
         default_sort="id",
         default_order="desc",
@@ -482,8 +256,8 @@ def export_logs():
             pass
     else:
         if l_q := request.args.get("logs_q", request.args.get("q", "")).strip():
-            where_clauses.append("(l.input_url LIKE ? OR l.error_code LIKE ? OR k.name LIKE ?)")
-            params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
+            where_clauses.append("(l.input_url LIKE ? OR l.error_code LIKE ?)")
+            params.extend([f"%{l_q}%", f"%{l_q}%"])
         if l_status := request.args.get("logs_status", request.args.get("status_code", "")).strip():
             if l_status == "200":
                 where_clauses.append("l.status_code < 400")
@@ -507,20 +281,17 @@ def export_logs():
     output = io.StringIO()
     output.write("\ufeff")
     writer = csv.writer(output, lineterminator="\r\n")
-    writer.writerow(("时间", "调用 Key", "平台", "请求路径", "请求 URL", "状态码", "耗时（毫秒）", "错误码"))
+    writer.writerow(("时间", "平台", "请求路径", "请求 URL", "状态码", "耗时（毫秒）", "错误码"))
 
-    sql = f"""SELECT l.*, k.key, k.name as key_name
+    sql = f"""SELECT l.*
               FROM request_logs l
-              LEFT JOIN api_keys k ON l.api_key_id = k.id
               {where_sql}
               ORDER BY l.id DESC"""
     cursor = db.execute(sql, params)
     while rows := cursor.fetchmany(1000):
         for row in rows:
-            key_display = f"{row['key_name']} ({row['key'][:11]}...)" if row["key"] else "Web 免鉴权"
             writer.writerow((
                 _safe_csv_cell(format_log_time(row["created_at"])),
-                _safe_csv_cell(key_display),
                 _safe_csv_cell(row["platform"] or ""),
                 _safe_csv_cell(row["path"]),
                 _safe_csv_cell(row["input_url"] or ""),

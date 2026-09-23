@@ -4,6 +4,7 @@ import fcntl
 from datetime import timedelta
 from flask import Flask
 from src.api.parse import bp as api_bp
+from src.api.wx import bp as wx_bp
 from src.web.views import bp as web_bp
 from src.auth import bp as auth_bp, register_template_helpers
 from src.web.portal import bp as portal_bp
@@ -43,7 +44,11 @@ def create_app(config=None):
     app.config['DATABASE'] = os.getenv(
         'DATABASE_PATH', os.path.join(app.instance_path, 'media_parser.db')
     )
-    app.config['MAX_CONTENT_LENGTH'] = 32 * 1024
+    # 原来是 32 * 1024。小程序头像走 multipart 直传，一张手机头像轻松超过 32KB，
+    # 保持 32KB 会让 /api/v1/wx/profile 直接 413（docs/wx-login.md §1.7）。
+    # 4MB 只用于让请求体进得来：各接口自己的校验（parse 的 2048 字上限、
+    # 头像的 AVATAR_MAX_BYTES = 2MB）才是真正的边界，放宽的只是那个 413 闸门。
+    app.config['MAX_CONTENT_LENGTH'] = 4 * 1024 * 1024
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
     app.config['JSON_SORT_KEYS'] = False
     app.config['TRUST_PROXY_HEADERS'] = os.getenv(
@@ -52,6 +57,11 @@ def create_app(config=None):
     app.config['API_ONLY'] = os.getenv(
         'API_ONLY', ''
     ).strip().lower() in {'1', 'true', 'yes', 'on'}
+    app.config['WX_APPID'] = os.getenv('WX_APPID', '').strip()
+    app.config['WX_APPSECRET'] = os.getenv('WX_APPSECRET', '').strip()
+    # 插件扫码登录的小程序码指向哪个版本：release（默认，生产）/ trial / develop。
+    # 小程序未发布前只有 trial 的码能被开发者扫开。
+    app.config['WX_QR_ENV_VERSION'] = os.getenv('WX_QR_ENV_VERSION', 'release').strip().lower()
     if hasattr(app, 'json'):
         app.json.sort_keys = False
     if config:
@@ -66,6 +76,8 @@ def create_app(config=None):
 
     # 注册蓝图
     app.register_blueprint(api_bp, url_prefix='/api')
+    # wx_bp 必须在外层：小程序是**纯 API 调用方**，API_ONLY=true 时它照样要能登录（§1.1）
+    app.register_blueprint(wx_bp, url_prefix='/api')
     if not app.config.get('API_ONLY'):
         register_template_helpers(app)
         app.register_blueprint(web_bp)

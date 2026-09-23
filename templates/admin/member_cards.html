@@ -1,0 +1,128 @@
+{% extends 'base_console.html' %}
+{% from 'components/pagination.html' import render_pagination %}
+{% block title %}开卡记录 · 管理员后台{% endblock %}
+{% block page_title %}开卡记录{% endblock %}
+{% block console_content %}
+<main class="space-y-6">
+    <div id="member_cards" class="tab-view space-y-6">
+    <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+            <div>
+                <div class="flex items-center gap-3">
+                    <h2 class="text-base font-bold text-slate-900">开卡记录</h2>
+                    <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">{{ cards_table.pagination.total_count }} 条</span>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">每一次成功开卡一条，按时间倒序。只记成功——开卡失败不会留下记录。</p>
+                <p class="text-xs text-slate-400 mt-0.5">
+                    卡种名称、天数、每日额度都是开卡当时的<strong class="font-semibold text-slate-500">快照</strong>：之后在「会员卡种」里改价或下架，都不会改动这里的旧记录。
+                </p>
+            </div>
+            <div class="shrink-0">
+                <a href="{{ url_for('admin.users') }}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition shadow-xs">
+                    去客户账号开卡 →
+                </a>
+            </div>
+        </div>
+
+        <!-- 筛选与搜索工具栏 -->
+        <form method="get" action="{{ url_for('admin.member_cards') }}" class="table-toolbar table-filter-form mb-5">
+            <div class="flex flex-wrap items-center gap-2.5">
+                <input type="text" name="cards_q" placeholder="搜索客户名 / 开卡人..." value="{{ cards_table.query_params.q }}" class="filter-input-text px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition w-52 bg-white">
+                <select name="cards_plan" onchange="this.form.submit()" class="px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition bg-white text-slate-700">
+                    <option value="">全部卡种</option>
+                    {# 用**记录里出现过的**卡种，而不是当前在架的卡种：下架一张卡之后，
+                       恰恰是它的历史记录最需要能被筛出来对账。 #}
+                    {% for plan in all_plans %}
+                    <option value="{{ plan['plan_code'] }}" {{ 'selected' if request.args.get('cards_plan') == plan['plan_code'] }}>{{ plan['plan_name'] }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn btn-secondary btn-small px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition shadow-xs" onclick="resetTableFilter('cards')">重置</button>
+            </div>
+        </form>
+
+        <div class="table-wrap overflow-x-auto rounded-xl border border-slate-200">
+            <table id="cards-table" class="w-full min-w-[900px] text-left text-xs border-collapse">
+                <thead class="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
+                    <tr>
+                        <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-16" onclick="handleSort('cards', 'id')">
+                            ID <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if cards_table.sorting.sort_by=='id' else 'text-slate-300' }}">{{ '↑' if cards_table.sorting.sort_by=='id' and cards_table.sorting.order=='asc' else ('↓' if cards_table.sorting.sort_by=='id' else '↕') }}</span>
+                        </th>
+                        <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap min-w-[110px]" onclick="handleSort('cards', 'username')">
+                            客户 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if cards_table.sorting.sort_by=='username' else 'text-slate-300' }}">{{ '↑' if cards_table.sorting.sort_by=='username' and cards_table.sorting.order=='asc' else ('↓' if cards_table.sorting.sort_by=='username' else '↕') }}</span>
+                        </th>
+                        <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-32" onclick="handleSort('cards', 'plan_code')">
+                            开出的卡 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if cards_table.sorting.sort_by=='plan_code' else 'text-slate-300' }}">{{ '↑' if cards_table.sorting.sort_by=='plan_code' and cards_table.sorting.order=='asc' else ('↓' if cards_table.sorting.sort_by=='plan_code' else '↕') }}</span>
+                        </th>
+                        <th class="px-3 py-3 whitespace-nowrap w-28">时长 · 每日额度</th>
+                        <th class="px-3 py-3 whitespace-nowrap w-28">开卡后档位</th>
+                        <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-28" onclick="handleSort('cards', 'expires_at')">
+                            会员到期 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if cards_table.sorting.sort_by=='expires_at' else 'text-slate-300' }}">{{ '↑' if cards_table.sorting.sort_by=='expires_at' and cards_table.sorting.order=='asc' else ('↓' if cards_table.sorting.sort_by=='expires_at' else '↕') }}</span>
+                        </th>
+                        <th class="px-3 py-3 whitespace-nowrap w-28">来源</th>
+                        <th class="px-3 py-3 whitespace-nowrap w-32">开卡人</th>
+                        <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-36" onclick="handleSort('cards', 'created_at')">
+                            开卡时间 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if cards_table.sorting.sort_by=='created_at' else 'text-slate-300' }}">{{ '↑' if cards_table.sorting.sort_by=='created_at' and cards_table.sorting.order=='asc' else ('↓' if cards_table.sorting.sort_by=='created_at' else '↕') }}</span>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for card in cards %}
+                    <tr class="hover:bg-slate-50/70 transition">
+                        <td class="px-3 py-3 font-mono text-slate-400 font-medium">#{{ card['id'] }}</td>
+                        <td class="px-3 py-3 whitespace-nowrap font-bold text-slate-900">
+                            {{ card['username'] }}
+                            <span class="text-slate-400 font-normal font-mono text-[11px] ml-1">#{{ card['user_id'] }}</span>
+                        </td>
+                        <td class="px-3 py-3 whitespace-nowrap">
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">{{ card['plan_name'] }}</span>
+                            <span class="text-slate-400 font-mono text-[11px] ml-1">{{ card['plan_code'] }}</span>
+                        </td>
+                        <td class="px-3 py-3 whitespace-nowrap text-slate-700">
+                            <span class="font-mono font-bold text-slate-900">{{ card['days'] }}</span> 天
+                            <span class="text-slate-400 mx-1">·</span>
+                            <span class="font-mono font-bold text-slate-900">{{ card['daily_quota'] }}</span> 次/日
+                        </td>
+                        {# 开卡后档位：与「开出的卡」不同才是信息 —— 已持更高档时额度只升不降，
+                           开出去的日卡不会把年卡降下来。相同时显示「同上」，一眼能看出没发生降级。 #}
+                        <td class="px-3 py-3 whitespace-nowrap">
+                            {% if card['effective_plan_code'] == card['plan_code'] %}
+                            <span class="text-slate-400">同上</span>
+                            {% elif card['effective_plan_code'] %}
+                            <span class="text-slate-700 font-semibold">{{ card['effective_plan_code'] }}</span>
+                            <span class="text-emerald-600 text-[11px] ml-0.5">保留原档</span>
+                            {% else %}
+                            <span class="text-slate-400">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3 whitespace-nowrap text-slate-700">{{ format_local_date(card['expires_at']) }}</td>
+                        <td class="px-3 py-3 whitespace-nowrap">
+                            {% if card['source'] == 'admin' %}
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">后台开卡</span>
+                            {% elif card['source'] == 'payment' %}
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">支付开通</span>
+                            {% else %}
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">{{ card['source'] }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3 whitespace-nowrap text-slate-600">
+                            {{ card['granted_by_name'] or '-' }}
+                            {% if card['granted_by'] %}
+                            <span class="text-slate-400 font-mono text-[11px] ml-1">#{{ card['granted_by'] }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3 whitespace-nowrap text-slate-500">{{ format_log_time(card['created_at']) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="9" class="text-center py-10 text-slate-400">暂无开卡记录</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {{ render_pagination(cards_table, 'cards', '条记录') }}
+    </section>
+    </div>
+</main>
+{% endblock %}

@@ -3,7 +3,7 @@
 {% block title %}运行日志 · 管理员后台{% endblock %}
 {% block page_title %}运行日志{% endblock %}
 {% block console_content %}
-<main class="max-w-7xl mx-auto space-y-6">
+<main class="space-y-6">
     <div id="logs" class="tab-view space-y-6">
         <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -64,7 +64,6 @@
                             <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-28" onclick="handleSort('logs', 'username')">
                                 客户 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if logs_table.sorting.sort_by=='username' else 'text-slate-300' }}">{{ '↑' if logs_table.sorting.sort_by=='username' and logs_table.sorting.order=='asc' else ('↓' if logs_table.sorting.sort_by=='username' else '↕') }}</span>
                             </th>
-                            <th class="px-3 py-3 whitespace-nowrap w-28">调用 Key</th>
                             <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-20" onclick="handleSort('logs', 'platform')">
                                 平台 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if logs_table.sorting.sort_by=='platform' else 'text-slate-300' }}">{{ '↑' if logs_table.sorting.sort_by=='platform' and logs_table.sorting.order=='asc' else ('↓' if logs_table.sorting.sort_by=='platform' else '↕') }}</span>
                             </th>
@@ -95,13 +94,6 @@
                                 <span class="text-slate-400">在线体验</span>
                                 {% endif %}
                             </td>
-                            <td class="px-3 py-3 whitespace-nowrap">
-                                {% if log['key'] %}
-                                <span class="font-mono text-[11px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200" title="{{ log['key'][:11] }}••••••••">{{ log['key'][:11] }}...</span>
-                                {% else %}
-                                <span class="text-slate-400 text-[11px]">Web 免鉴权</span>
-                                {% endif %}
-                            </td>
                             <td class="px-3 py-3 whitespace-nowrap font-medium text-slate-700">{{ log['platform'] or '-' }}</td>
                             <td class="px-3 py-3 max-w-sm truncate">
                                 {% if log['input_url'] %}
@@ -120,7 +112,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="9" class="text-center py-10 text-slate-400">暂无符合条件的日志记录</td>
+                            <td colspan="8" class="text-center py-10 text-slate-400">暂无符合条件的日志记录</td>
                         </tr>
                         {% endfor %}
                     </tbody>

@@ -3,13 +3,29 @@ from datetime import datetime, time, timedelta, timezone
 import io
 from zoneinfo import ZoneInfo
 
-from flask import Blueprint, Response, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, current_app, flash, g, jsonify, redirect, render_template, request, session, url_for
 
 from werkzeug.security import generate_password_hash
 
 from configs.general_constants import DOMAIN_TO_NAME
-from src.auth import admin_required, csrf_protected, format_log_time, generate_api_key, hash_api_key
-from src.db import get_daily_trend, get_db, get_platform_distribution, get_top_users, set_setting, utcnow
+from src.auth import admin_required, csrf_protected, format_log_time
+from src.db import (
+    DEFAULT_CHECKIN_BONUS,
+    DEFAULT_FREE_DAILY_QUOTA,
+    beijing_today,
+    daily_quota_cap,
+    get_daily_trend,
+    get_daily_usage_map,
+    get_db,
+    get_platform_distribution,
+    get_top_users,
+    is_member,
+    open_member_card,
+    record_member_card_grant,
+    set_setting,
+    setting,
+    utcnow,
+)
 from src.utils.table_query import paginate_memory_list, query_paginated_table
 
 
@@ -19,13 +35,6 @@ bp = Blueprint("admin", __name__, url_prefix="/admin")
 def _positive_int(value, default=1, maximum=1000):
     try:
         return max(1, min(int(value), maximum))
-    except (TypeError, ValueError):
-        return default
-
-
-def _non_negative_int(value, default=0, maximum=9999):
-    try:
-        return max(0, min(int(value), maximum))
     except (TypeError, ValueError):
         return default
 
@@ -122,11 +131,8 @@ def update_settings():
     for name in ("global_api_enabled", "homepage_enabled", "demo_enabled", "registration_enabled", "api_tip_enabled"):
         set_setting(name, "1" if request.form.get(name) else "0")
     set_setting("default_user_qps", _positive_int(request.form.get("default_user_qps"), 2))
-
-    if request.form.get("chk_unlimited_trial") == "1" or request.form.get("default_trial_days") == "0":
-        set_setting("default_trial_days", 0)
-    else:
-        set_setting("default_trial_days", _non_negative_int(request.form.get("default_trial_days"), 365, 9999))
+    set_setting("wx_free_daily_quota", _positive_int(request.form.get("wx_free_daily_quota"), DEFAULT_FREE_DAILY_QUOTA, 100000))
+    set_setting("wx_checkin_bonus", _positive_int(request.form.get("wx_checkin_bonus"), DEFAULT_CHECKIN_BONUS, 100000))
 
     if request.form.get("chk_unlimited_credits") == "1" or request.form.get("default_initial_credits") == "-1":
         set_setting("default_initial_credits", -1)
@@ -183,16 +189,14 @@ def users():
         "id": "u.id",
         "username": "u.username",
         "role": "u.role",
-        "key_count": "key_count",
         "created_at": "u.created_at",
-        "expires_at": "u.expires_at",
         "qps_limit": "u.qps_limit",
         "credits": "u.credits",
     }
     users_table = query_paginated_table(
         db,
         base_from_sql="users u",
-        select_fields="u.*, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id=u.id) AS key_count",
+        select_fields="u.*",
         allowed_sorts=users_allowed_sorts,
         default_sort="id",
         default_order="desc",
@@ -203,12 +207,80 @@ def users():
         prefix="users_",
     )
 
+    member_plans = db.execute(
+        "SELECT * FROM member_plans WHERE active=1 ORDER BY sort_order, code"
+    ).fetchall()
+
+    # 「会员」列与「今日额度」列所需的每行数据。
+    # 卡种与免费额度**预加载一次**：不预加载的话，20 行 × 每行 2 次查询（卡种表 +
+    # system_settings）就是 40 条只为渲染一页的 SQL。用量则一次性按 IN 取回。
+    plans_by_code = {plan["code"]: int(plan["daily_quota"]) for plan in member_plans}
+    plan_names = {plan["code"]: plan["name"] for plan in member_plans}
+    free_quota = setting("wx_free_daily_quota", DEFAULT_FREE_DAILY_QUOTA)
+    usage_map = get_daily_usage_map([u["id"] for u in users_table["items"]], beijing_today())
+    quota_info = {}
+    for u in users_table["items"]:
+        if u["role"] == "admin":
+            # 管理员 cap 为 None = 不限，与 access.py 的 `quota_cap = None if role=='admin'`
+            # 同一口径：consume_daily_quota 拿到 None 既不拦也不记账。所以后台**不能**
+            # 按免费档给管理员显示「0 / 10」—— 那是个并不存在的额度。
+            quota_info[u["id"]] = {"used": 0, "cap": None, "member": None, "plan_name": None}
+            continue
+        # 会员判定用 is_member()（唯一真相来源），**不是**「member_plan 非空」：
+        # 卡种下架后 member_plan 还留着，但额度已经掉回免费档。两列必须同口径，
+        # 否则会出现「显示年卡、额度却是 10」这种自相矛盾的行。
+        member = is_member(u)
+        quota_info[u["id"]] = {
+            "used": usage_map.get(u["id"], 0),
+            "cap": daily_quota_cap(u, plans_by_code, free_quota),
+            "member": member,
+            "plan_name": plan_names.get(u["member_plan"]) if member else None,
+        }
+
     return render_template(
         "admin/users.html",
         users=users_table["items"],
         users_table=users_table,
+        member_plans=member_plans,
+        quota_info=quota_info,
         active_nav="users",
     )
+
+
+# ----------------------------------------------------------------------
+# 3.1 会员卡种 (Member Plans)
+# ----------------------------------------------------------------------
+
+@bp.get("/member-plans")
+@admin_required
+def member_plans():
+    db = get_db()
+    plans = db.execute("SELECT * FROM member_plans ORDER BY sort_order, code").fetchall()
+    return render_template("admin/member_plans.html", plans=plans, active_nav="member_plans")
+
+
+@bp.post("/member-plans/<code>")
+@admin_required
+@csrf_protected
+def update_member_plan(code):
+    db = get_db()
+    exists = db.execute("SELECT code FROM member_plans WHERE code=?", (code,)).fetchone()
+    if not exists:
+        flash("卡种不存在", "error")
+        return redirect(url_for("admin.member_plans"))
+    db.execute(
+        "UPDATE member_plans SET name=?, days=?, daily_quota=?, active=? WHERE code=?",
+        (
+            (request.form.get("name") or "").strip()[:20] or code,
+            _positive_int(request.form.get("days"), 1, 3650),
+            _positive_int(request.form.get("daily_quota"), 1, 100000),
+            1 if request.form.get("active") else 0,
+            code,
+        ),
+    )
+    db.commit()
+    flash("卡种已保存", "success")
+    return redirect(url_for("admin.member_plans"))
 
 
 @bp.post("/users/<int:user_id>")
@@ -222,23 +294,15 @@ def update_user(user_id):
         return redirect(url_for("admin.users"))
 
     # 快捷切换启用/停用状态
-    if "active" in request.form and "qps_limit" not in request.form and "credits" not in request.form and "expires_at" not in request.form:
+    # 守卫的三项（qps_limit / credits）是「这是编辑弹窗的完整表单」的判据：
+    # 客户账号页「状态」列那个按钮只提交 active，走这条分支，不碰积分和 QPS。
+    if "active" in request.form and "qps_limit" not in request.form and "credits" not in request.form:
         active_val = 1 if request.form.get("active") in ("1", "true", "on") else 0
         db.execute("UPDATE users SET active=? WHERE id=? AND role!='admin'", (active_val, user_id))
         db.commit()
         status_text = "已启用" if active_val else "已停用"
         flash(f"已成功{status_text}客户「{user['username']}」", "success")
         return redirect(url_for("admin.users"))
-
-    expires = request.form.get("expires_at", "").strip()
-    expires_at = None
-    if expires:
-        try:
-            local_end = datetime.combine(datetime.strptime(expires, "%Y-%m-%d").date(), time.max)
-            expires_at = local_end.replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc).isoformat(timespec="seconds")
-        except ValueError:
-            flash("到期日期格式无效", "error")
-            return redirect(url_for("admin.users"))
 
     credits_raw = request.form.get("credits", "").replace(",", "").strip()
     try:
@@ -252,30 +316,107 @@ def update_user(user_id):
         active_val = 1 if request.form.get("active") in ("1", "true", "on") else 0
         if user_credits is not None:
             db.execute(
-                "UPDATE users SET active=?, expires_at=?, qps_limit=?, credits=? WHERE id=? AND role!='admin'",
-                (active_val, expires_at, qps, user_credits, user_id),
+                "UPDATE users SET active=?, qps_limit=?, credits=? WHERE id=? AND role!='admin'",
+                (active_val, qps, user_credits, user_id),
             )
         else:
             db.execute(
-                "UPDATE users SET active=?, expires_at=?, qps_limit=? WHERE id=? AND role!='admin'",
-                (active_val, expires_at, qps, user_id),
+                "UPDATE users SET active=?, qps_limit=? WHERE id=? AND role!='admin'",
+                (active_val, qps, user_id),
             )
     else:
         # 编辑弹窗保存（不修改现有启用/停用状态）
         if user_credits is not None:
             db.execute(
-                "UPDATE users SET expires_at=?, qps_limit=?, credits=? WHERE id=? AND role!='admin'",
-                (expires_at, qps, user_credits, user_id),
+                "UPDATE users SET qps_limit=?, credits=? WHERE id=? AND role!='admin'",
+                (qps, user_credits, user_id),
             )
         else:
             db.execute(
-                "UPDATE users SET expires_at=?, qps_limit=? WHERE id=? AND role!='admin'",
-                (expires_at, qps, user_id),
+                "UPDATE users SET qps_limit=? WHERE id=? AND role!='admin'",
+                (qps, user_id),
             )
 
     db.commit()
     flash("客户设置已保存", "success")
     return redirect(url_for("admin.users"))
+
+
+@bp.post("/users/<int:user_id>/member-card")
+@admin_required
+@csrf_protected
+def grant_member_card(user_id):
+    """运营手动开卡。第二期接入虚拟支付后，支付回调走同一个 open_member_card()。"""
+    plan_code = (request.form.get("plan_code") or "").strip()
+    ok, message, expires = open_member_card(user_id, plan_code)
+    if ok and record_member_card_grant(user_id, plan_code, expires, granted_by=g.user["id"]) is None:
+        # 只记日志、不回滚开卡：卡已经开出并提交了，为了记不上账把它撤销更糟。
+        current_app.logger.warning(
+            f"开卡记录写入失败：user_id={user_id} plan={plan_code}（卡已开通，仅少了审计行）"
+        )
+    flash(message, "success" if ok else "error")
+    return redirect(url_for("admin.users"))
+
+
+@bp.get("/member-cards")
+@admin_required
+def member_cards():
+    """开卡记录：谁、什么时候、给谁开过哪张卡。"""
+    db = get_db()
+    where_clauses, params = [], []
+    if c_q := request.args.get("cards_q", "").strip():
+        where_clauses.append("(g.username LIKE ? OR g.granted_by_name LIKE ?)")
+        params.extend([f"%{c_q}%", f"%{c_q}%"])
+    if c_plan := request.args.get("cards_plan", "").strip():
+        where_clauses.append("g.plan_code = ?")
+        params.append(c_plan)
+
+    cards_table = query_paginated_table(
+        db,
+        base_from_sql="member_card_grants g",
+        select_fields="g.*",
+        allowed_sorts={
+            "id": "g.id",
+            "username": "g.username",
+            "plan_code": "g.plan_code",
+            "expires_at": "g.expires_at",
+            "created_at": "g.created_at",
+        },
+        default_sort="id",
+        default_order="desc",
+        where_clauses=where_clauses,
+        where_params=params,
+        request_args=request.args,
+        default_page_size=20,
+        prefix="cards_",
+    )
+
+    plans = db.execute("SELECT code, name FROM member_plans ORDER BY sort_order, code").fetchall()
+    # 筛选下拉的卡种 = 「在架的」∪「记录里出现过的」，两边缺一不可：
+    #   * 只用记录里的（最初的实现）：一条记录都还没有时是个空框 —— 上线第一天运营打开
+    #     这一页，筛选框里只有「全部卡种」，看着像坏了；
+    #   * 只用在架的：卡种下架或删掉之后，它开出去的卡就再也筛不出来，而那恰恰是最需要
+    #     对账的时候。
+    # 同一个 code 两边都有时以 member_plans 的名称为准：后台改了名字，筛选项要跟着改，
+    # 否则运营按新名字找不到、按旧名字才找得到。dict 保留插入顺序 —— 在架卡种按
+    # sort_order 排在前面，只剩历史记录的卡种缀在后面。
+    plan_names = {row["code"]: row["name"] for row in plans}
+    for row in db.execute(
+        "SELECT DISTINCT plan_code, plan_name FROM member_card_grants ORDER BY plan_name"
+    ):
+        plan_names.setdefault(row["plan_code"], row["plan_name"])
+    all_plans = [
+        {"plan_code": code, "plan_name": name} for code, name in plan_names.items()
+    ]
+
+    return render_template(
+        "admin/member_cards.html",
+        cards=cards_table["items"],
+        cards_table=cards_table,
+        plans=plans,
+        all_plans=all_plans,
+        active_nav="member_cards",
+    )
 
 
 @bp.post("/users/<int:user_id>/reset-password")
@@ -363,18 +504,6 @@ def batch_users():
                 flash(f"已批量设置符合筛选条件的全部 {matched_count} 个客户并发 QPS 为 {qps}", "success")
             except ValueError:
                 flash("QPS 格式无效", "error")
-        elif action == "set_expires":
-            expires = request.form.get("expires_at", "").strip()
-            expires_at = None
-            if expires:
-                try:
-                    local_end = datetime.combine(datetime.strptime(expires, "%Y-%m-%d").date(), time.max)
-                    expires_at = local_end.replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc).isoformat(timespec="seconds")
-                except ValueError:
-                    flash("到期日期格式无效", "error")
-                    return redirect(url_for("admin.users"))
-            db.execute(f"UPDATE users SET expires_at=? WHERE id IN ({subquery})", [expires_at] + users_params)
-            flash(f"已批量设置符合筛选条件的全部 {matched_count} 个客户账号到期时间", "success")
         else:
             flash("不支持的批量操作类型", "error")
             return redirect(url_for("admin.users"))
@@ -425,234 +554,12 @@ def batch_users():
             flash(f"已批量设置选中的 {len(user_ids)} 个客户并发 QPS 为 {qps}", "success")
         except ValueError:
             flash("QPS 格式无效", "error")
-    elif action == "set_expires":
-        expires = request.form.get("expires_at", "").strip()
-        expires_at = None
-        if expires:
-            try:
-                local_end = datetime.combine(datetime.strptime(expires, "%Y-%m-%d").date(), time.max)
-                expires_at = local_end.replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc).isoformat(timespec="seconds")
-            except ValueError:
-                flash("到期日期格式无效", "error")
-                return redirect(url_for("admin.users"))
-        db.execute(f"UPDATE users SET expires_at=? WHERE id IN ({placeholders}) AND role!='admin'", [expires_at] + user_ids)
-        flash(f"已批量设置选中的 {len(user_ids)} 个客户账号到期时间", "success")
     else:
         flash("不支持的批量操作类型", "error")
         return redirect(url_for("admin.users"))
 
     db.commit()
     return redirect(url_for("admin.users"))
-
-
-# ----------------------------------------------------------------------
-# 4. API 密钥 (Keys)
-# ----------------------------------------------------------------------
-
-@bp.get("/keys")
-@admin_required
-def keys():
-    db = get_db()
-    keys_where, keys_params = [], []
-    if k_q := request.args.get("keys_q", "").strip():
-        keys_where.append("(k.name LIKE ? OR u.username LIKE ?)")
-        keys_params.extend([f"%{k_q}%", f"%{k_q}%"])
-    if k_active := request.args.get("keys_active", "").strip():
-        try:
-            val = int(k_active)
-            keys_where.append("k.active = ?")
-            keys_params.append(val)
-        except ValueError:
-            pass
-
-    keys_allowed_sorts = {
-        "id": "k.id",
-        "name": "k.name",
-        "username": "u.username",
-        "created_at": "k.created_at",
-        "last_used_at": "k.last_used_at",
-        "qps_limit": "k.qps_limit",
-        "active": "k.active",
-    }
-    keys_table = query_paginated_table(
-        db,
-        base_from_sql="api_keys k JOIN users u ON u.id=k.user_id",
-        select_fields="k.*, u.username, u.role user_role, u.qps_limit user_qps",
-        allowed_sorts=keys_allowed_sorts,
-        default_sort="id",
-        default_order="desc",
-        where_clauses=keys_where,
-        where_params=keys_params,
-        request_args=request.args,
-        default_page_size=20,
-        prefix="keys_",
-    )
-    all_users = db.execute("SELECT id, username, role, active FROM users ORDER BY id ASC").fetchall()
-
-    return render_template(
-        "admin/keys.html",
-        api_keys=keys_table["items"],
-        keys_table=keys_table,
-        all_users=all_users,
-        new_api_key=session.pop("new_api_key", None),
-        active_nav="keys",
-    )
-
-
-@bp.post("/keys")
-@admin_required
-@csrf_protected
-def create_key():
-    name = request.form.get("name", "").strip()[:40] or "管理员专属密钥"
-    target_user_id = request.form.get("user_id", "").strip()
-    db = get_db()
-    if target_user_id:
-        user = db.execute("SELECT * FROM users WHERE id=?", (target_user_id,)).fetchone()
-        if not user:
-            flash("指定的归属账号不存在", "error")
-            return redirect(url_for("admin.keys"))
-        user_id = user["id"]
-        target_name = user["username"]
-    else:
-        user_id = g.user["id"]
-        target_name = g.user["username"]
-
-    qps_raw = request.form.get("qps_limit", "").strip()
-    qps = _positive_int(qps_raw) if qps_raw else None
-
-    raw_key = generate_api_key()
-
-    db.execute(
-        "INSERT INTO api_keys(user_id, name, key, qps_limit, created_at) VALUES(?,?,?,?,?)",
-        (user_id, name, raw_key, qps, utcnow()),
-    )
-    db.commit()
-    session["new_api_key"] = raw_key
-    flash(f"已为「{target_name}」成功创建 API 密钥「{name}」", "success")
-    return redirect(url_for("admin.keys"))
-
-
-@bp.post("/keys/<int:key_id>/update")
-@admin_required
-@csrf_protected
-def update_key(key_id):
-    db = get_db()
-    name = request.form.get("name", "").strip()[:40] if "name" in request.form else None
-    qps_raw = request.form.get("qps_limit", "").strip() if "qps_limit" in request.form else None
-    qps = _positive_int(qps_raw) if qps_raw else None
-    active = 1 if request.form.get("active") else 0
-
-    if name:
-        db.execute("UPDATE api_keys SET name=?, active=?, qps_limit=? WHERE id=?", (name, active, qps, key_id))
-    else:
-        db.execute("UPDATE api_keys SET active=?, qps_limit=? WHERE id=?", (active, qps, key_id))
-
-    db.commit()
-    flash("API Key 已成功更新", "success")
-    return redirect(url_for("admin.keys"))
-
-
-@bp.post("/keys/<int:key_id>/delete")
-@admin_required
-@csrf_protected
-def delete_key(key_id):
-    db = get_db()
-    db.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
-    db.commit()
-    flash("API 密钥已彻底删除", "success")
-    return redirect(url_for("admin.keys"))
-
-
-@bp.post("/keys/batch")
-@admin_required
-@csrf_protected
-def batch_keys():
-    db = get_db()
-    action = request.form.get("action", "").strip()
-    select_mode = request.form.get("select_mode", "page").strip()
-
-    if not action:
-        flash("未指定批量操作类型", "error")
-        return redirect(url_for("admin.keys"))
-
-    if select_mode == "all":
-        keys_where, keys_params = [], []
-        if k_q := (request.form.get("keys_q") or request.form.get("q") or "").strip():
-            keys_where.append("(k.name LIKE ? OR u.username LIKE ?)")
-            keys_params.extend([f"%{k_q}%", f"%{k_q}%"])
-        if k_user_id := (request.form.get("keys_user_id") or request.form.get("user_id") or "").strip():
-            if k_user_id.isdigit():
-                keys_where.append("k.user_id = ?")
-                keys_params.append(int(k_user_id))
-        if k_active := (request.form.get("keys_active") or request.form.get("active") or "").strip():
-            try:
-                val = int(k_active)
-                keys_where.append("k.active = ?")
-                keys_params.append(val)
-            except ValueError:
-                pass
-
-        where_sql = (" WHERE " + " AND ".join(keys_where)) if keys_where else ""
-        subquery = f"SELECT k.id FROM api_keys k LEFT JOIN users u ON u.id=k.user_id{where_sql}"
-        matched_count = db.execute(f"SELECT COUNT(*) as c FROM api_keys WHERE id IN ({subquery})", keys_params).fetchone()["c"]
-
-        if action == "enable":
-            db.execute(f"UPDATE api_keys SET active=1 WHERE id IN ({subquery})", keys_params)
-            flash(f"已批量启用符合筛选条件的全部 {matched_count} 个 API Key", "success")
-        elif action == "disable":
-            db.execute(f"UPDATE api_keys SET active=0 WHERE id IN ({subquery})", keys_params)
-            flash(f"已批量停用符合筛选条件的全部 {matched_count} 个 API Key", "success")
-        elif action == "set_qps":
-            qps_raw = request.form.get("qps_limit", "").strip()
-            qps = _positive_int(qps_raw) if qps_raw else None
-            db.execute(f"UPDATE api_keys SET qps_limit=? WHERE id IN ({subquery})", [qps] + keys_params)
-            flash(f"已批量更新符合筛选条件的全部 {matched_count} 个 API Key 限流", "success")
-        elif action == "delete":
-            db.execute(f"DELETE FROM api_keys WHERE id IN ({subquery})", keys_params)
-            flash(f"已批量彻底删除符合筛选条件的全部 {matched_count} 个 API Key", "success")
-        else:
-            flash("不支持的批量操作类型", "error")
-            return redirect(url_for("admin.keys"))
-
-        db.commit()
-        return redirect(url_for("admin.keys"))
-
-    ids_raw = request.form.get("ids", "").strip()
-    if not ids_raw:
-        flash("请先勾选需要批量操作的 API Key", "error")
-        return redirect(url_for("admin.keys"))
-
-    try:
-        key_ids = [int(i.strip()) for i in ids_raw.split(",") if i.strip().isdigit()]
-    except ValueError:
-        key_ids = []
-
-    if not key_ids:
-        flash("未获取到有效的密钥 ID 列表", "error")
-        return redirect(url_for("admin.keys"))
-
-    placeholders = ",".join(["?"] * len(key_ids))
-
-    if action == "enable":
-        db.execute(f"UPDATE api_keys SET active=1 WHERE id IN ({placeholders})", key_ids)
-        flash(f"已批量启用选中的 {len(key_ids)} 个 API Key", "success")
-    elif action == "disable":
-        db.execute(f"UPDATE api_keys SET active=0 WHERE id IN ({placeholders})", key_ids)
-        flash(f"已批量停用选中的 {len(key_ids)} 个 API Key", "success")
-    elif action == "set_qps":
-        qps_raw = request.form.get("qps_limit", "").strip()
-        qps = _positive_int(qps_raw) if qps_raw else None
-        db.execute(f"UPDATE api_keys SET qps_limit=? WHERE id IN ({placeholders})", [qps] + key_ids)
-        flash(f"已批量更新选中的 {len(key_ids)} 个 API Key 限流", "success")
-    elif action == "delete":
-        db.execute(f"DELETE FROM api_keys WHERE id IN ({placeholders})", key_ids)
-        flash(f"已批量彻底删除选中的 {len(key_ids)} 个 API Key", "success")
-    else:
-        flash("不支持的批量操作类型", "error")
-        return redirect(url_for("admin.keys"))
-
-    db.commit()
-    return redirect(url_for("admin.keys"))
 
 
 # ----------------------------------------------------------------------
@@ -890,25 +797,6 @@ def batch_platforms():
 
 
 # ----------------------------------------------------------------------
-# 6. 开发者文档 (Docs)
-# ----------------------------------------------------------------------
-
-@bp.get("/docs")
-@admin_required
-def docs():
-    db = get_db()
-    my_keys = db.execute(
-        "SELECT * FROM api_keys WHERE user_id=? ORDER BY id DESC", (g.user["id"],)
-    ).fetchall()
-    return render_template(
-        "admin/docs.html",
-        my_nav="docs",
-        my_keys=my_keys,
-        active_nav="docs",
-    )
-
-
-# ----------------------------------------------------------------------
 # 7. 运行日志 (Logs)
 # ----------------------------------------------------------------------
 
@@ -953,8 +841,8 @@ def logs():
 
     logs_table = query_paginated_table(
         db,
-        base_from_sql="request_logs l LEFT JOIN users u ON u.id=l.user_id LEFT JOIN api_keys k ON k.id=l.api_key_id",
-        select_fields="l.*, u.username, k.key",
+        base_from_sql="request_logs l LEFT JOIN users u ON u.id=l.user_id",
+        select_fields="l.*, u.username",
         allowed_sorts=logs_allowed_sorts,
         default_sort="id",
         default_order="desc",
@@ -1035,11 +923,11 @@ def export_logs():
     output = io.StringIO()
     output.write("\ufeff")
     writer = csv.writer(output, lineterminator="\r\n")
-    writer.writerow(("时间", "客户", "Key", "平台", "请求路径", "请求 URL", "状态码", "耗时（毫秒）", "错误码"))
+    writer.writerow(("时间", "客户", "平台", "请求路径", "请求 URL", "状态码", "耗时（毫秒）", "错误码"))
 
     cursor = db.execute(
-        f"SELECT l.*, u.username, k.key FROM request_logs l "
-        f"LEFT JOIN users u ON u.id=l.user_id LEFT JOIN api_keys k ON k.id=l.api_key_id "
+        f"SELECT l.*, u.username FROM request_logs l "
+        f"LEFT JOIN users u ON u.id=l.user_id "
         f"{where_sql} ORDER BY l.id DESC",
         params,
     )
@@ -1048,7 +936,6 @@ def export_logs():
             writer.writerow((
                 _safe_csv_cell(format_log_time(row["created_at"])),
                 _safe_csv_cell(row["username"] or "在线体验"),
-                _safe_csv_cell(f"{row['key'][:11]}••••••••" if row["key"] else ""),
                 _safe_csv_cell(row["platform"] or ""),
                 _safe_csv_cell(row["path"]),
                 _safe_csv_cell(row["input_url"] or ""),
@@ -1117,7 +1004,7 @@ def batch_logs():
             params.append(utc_end)
 
         where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-        subquery = f"SELECT l.id FROM request_logs l LEFT JOIN users u ON u.id=l.user_id LEFT JOIN api_keys k ON k.id=l.api_key_id{where_sql}"
+        subquery = f"SELECT l.id FROM request_logs l LEFT JOIN users u ON u.id=l.user_id{where_sql}"
         matched_count = db.execute(f"SELECT COUNT(*) as c FROM request_logs WHERE id IN ({subquery})", params).fetchone()["c"]
 
         if action == "delete":

@@ -67,7 +67,7 @@ media-parser/
 │   └── parsers/               # 平台逆向分析手册
 ├── src/                       # 核心业务逻辑
 │   ├── api/                   # RESTful API 路由 (/api/parse, /api/health)
-│   ├── database/              # SQLite 存储管理 (系统设置/用户/API Key/调用日志)
+│   ├── database/              # SQLite 存储管理 (系统设置/用户/会员卡/调用日志)
 │   ├── web/                   # Demo 体验页与后台管理蓝图 (admin)
 │   ├── parsers/               # 各平台解析器模块 (核心解析逻辑)
 │   ├── utils/                 # 工具层 (CookieManager 统一凭据管理器)
@@ -206,7 +206,7 @@ graph TD
 
     subgraph FullStackMode["模式 A: 完整站长/SaaS模式 (API_ONLY=false)"]
         WebUI["Web 前端 + 体验页 + 管理控制台"]
-        AuthSystem["API Key 鉴权 + 积分扣除 + QPS 限流"]
+        AuthSystem["X-WX-Token 鉴权 + 两层次数扣减 + QPS 限流"]
         DBLogging["SQLite request_logs 日志入库"]
     end
 
@@ -230,7 +230,9 @@ graph TD
 
 1. **标准 SaaS 运营模式 (`API_ONLY=false`)**：
    - 挂载全部 Web 前端（首页、用户控制台 `/portal`、管理后台 `/admin`、认证 `/auth`）。
-   - 启用 API Key 鉴权、用户有效期与积分扣减、单用户/单Key QPS 桶限流，并将每次调用审计记录写入 SQLite。
+   - `/api/v1/parse` 以 **`X-WX-Token`**（微信小程序静默登录令牌）鉴权；`/api/parse` 是无令牌的网页体验通道，按 IP 频控。
+   - 启用用户有效期与**两层额度**扣减（先扣当日额度，用尽再接签到余额）、**按用户**的 QPS 桶限流，并将每次调用审计记录写入 SQLite。
+   - 🔄 **2026-09-22 修订**：原写作「API Key 鉴权、用户有效期与积分扣减、单用户/单Key QPS 桶限流」。API Key 鉴权通道**已整体撤销**（理由见 `docs/api.md` §1.1.1）；扣减模型也从单层的「积分」改为上述两层。QPS 桶从来就是**按用户**计的（令牌与密钥共享同一个 `user:{id}` 桶），「单 Key」是当时的措辞。
 2. **纯解析微服务模式 (`API_ONLY=true`)**：
    - 彻底关闭 Web 页面路由，专供内网或下游自动化服务（如 Telegram/微信 Bot、下载器、爬虫后端）调用。
    - `GET /api/v1/parse` 与 `POST /api/parse` 均为完全免鉴权接口，直接传参秒级响应。

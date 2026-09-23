@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin', 'user')),
     active INTEGER NOT NULL DEFAULT 1,
-    expires_at TEXT,
     qps_limit INTEGER NOT NULL DEFAULT 2,
     credits INTEGER NOT NULL DEFAULT 100,
     created_at TEXT NOT NULL
@@ -62,6 +61,100 @@ CREATE INDEX IF NOT EXISTS idx_rate_limit_bucket_time ON rate_limit_buckets(buck
 """
 
 
+DEFAULT_FREE_DAILY_QUOTA = 10
+DEFAULT_CHECKIN_BONUS = 10
+
+
+# 新表与新索引单独成段：它们要在 users 的新列补齐之后才能建
+# （idx_users_openid 引用的 openid 列由 _ensure_column 添加，不是 SCHEMA 自带的）
+SCHEMA_EXTRA = """
+CREATE TABLE IF NOT EXISTS wx_sessions (
+    token_hash   TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL,
+    session_key  TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS member_plans (
+    code          TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    days          INTEGER NOT NULL,
+    daily_quota   INTEGER NOT NULL,
+    price_fen     INTEGER,
+    wx_product_id TEXT,
+    active        INTEGER NOT NULL DEFAULT 1,
+    sort_order    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS daily_usage (
+    user_id INTEGER NOT NULL,
+    day     TEXT NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id, day)
+);
+CREATE TABLE IF NOT EXISTS wx_orders (
+    out_trade_no TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL,
+    plan_code    TEXT NOT NULL,
+    amount_fen   INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'created',
+    wx_order_id  TEXT,
+    created_at   TEXT NOT NULL,
+    paid_at      TEXT,
+    delivered_at TEXT
+);
+CREATE TABLE IF NOT EXISTS member_card_grants (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             INTEGER NOT NULL,
+    username            TEXT NOT NULL,
+    plan_code           TEXT NOT NULL,
+    plan_name           TEXT NOT NULL,
+    days                INTEGER NOT NULL,
+    daily_quota         INTEGER NOT NULL,
+    effective_plan_code TEXT,
+    expires_at          TEXT NOT NULL,
+    source              TEXT NOT NULL DEFAULT 'admin',
+    granted_by          INTEGER,
+    granted_by_name     TEXT,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_card_grants_user ON member_card_grants(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_card_grants_created_at ON member_card_grants(created_at DESC);
+CREATE TABLE IF NOT EXISTS ext_pairings (
+    code_hash   TEXT PRIMARY KEY,   -- 配对码的 sha256，明文码绝不落库
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending=等扫码 confirmed=已确认待发放 consumed=已发放
+    user_id     INTEGER,            -- 确认人（配对成功前为 NULL）
+    token_hash  TEXT,               -- 发放令牌在 wx_sessions 里的 hash，对账用
+    token_enc   TEXT,               -- 令牌明文的 AES-GCM 密文：status 轮询要把它原样发给插件，
+                                    -- 而 DB 里只存哈希的规矩不能破（§1.3），所以短存 5 分钟密文
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_openid ON users(openid) WHERE openid IS NOT NULL;
+"""
+
+
+# 设计文档 §1.4：这 7 列**故意不写进 SCHEMA**。SQLite 的 CREATE TABLE IF NOT EXISTS
+# 对已存在的表不生效，写进去只会让新库有线、旧库没线 —— 开发机能跑、线上报错。
+# 统一由 _ensure_column 补，保证新旧库的来源一致。
+NEW_USER_COLUMNS = (
+    ("openid", "TEXT"),
+    ("nickname", "TEXT"),
+    ("avatar", "TEXT"),
+    ("member_plan", "TEXT"),
+    ("member_expires_at", "TEXT"),
+    ("last_checkin_date", "TEXT"),
+    ("checkin_streak", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+MEMBER_PLAN_SEED = (
+    ("day", "日卡", 1, 200, 0),
+    ("month", "月卡", 30, 300, 1),
+    ("quarter", "季卡", 90, 300, 2),
+    ("year", "年卡", 365, 500, 3),
+)
+
+
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -98,19 +191,33 @@ def close_db(_error=None):
         db.close()
 
 
+def _ensure_column(db, table, column, ddl):
+    """SQLite 没有 ALTER ... ADD COLUMN IF NOT EXISTS，只能先查 PRAGMA 再补列。
+
+    只加列，不改列、不删列 —— 保持向前兼容（设计文档 §1.4）。
+    """
+    existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_db():
     db = get_db()
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = NORMAL")
     db.executescript(SCHEMA)
+    for column, ddl in NEW_USER_COLUMNS:
+        _ensure_column(db, "users", column, ddl)
+    db.executescript(SCHEMA_EXTRA)
     defaults = {
         "global_api_enabled": "1",
         "homepage_enabled": "1",
         "demo_enabled": "1",
         "registration_enabled": "1",
         "default_user_qps": "2",
-        "default_trial_days": "365",
         "default_initial_credits": "100",
+        "wx_free_daily_quota": str(DEFAULT_FREE_DAILY_QUOTA),
+        "wx_checkin_bonus": str(DEFAULT_CHECKIN_BONUS),
         "api_tip_enabled": "1",
         "api_tip_author": "ucmao",
         "api_tip_website": "https://github.com/ucmao/media-parser",
@@ -120,11 +227,23 @@ def init_db():
         "INSERT OR IGNORE INTO system_settings(key, value) VALUES (?, ?)",
         defaults.items(),
     )
+    # INSERT OR IGNORE：运营在后台改过的额度不会被重启覆盖
+    db.executemany(
+        "INSERT OR IGNORE INTO member_plans(code, name, days, daily_quota, sort_order) VALUES (?, ?, ?, ?, ?)",
+        MEMBER_PLAN_SEED,
+    )
     db.commit()
 
 
 def reserve_user_credit(user_id):
-    """原子预扣一次积分；True 表示已扣，False 表示无需扣，None 表示余额不足。"""
+    """原子预扣一次签到余额；True 表示已扣，False 表示无需扣，None 表示余额不足。
+
+    2026-09-22 起它的唯一调用方是小程序路径的**第二层**（每日额度用尽后才轮到它，
+    见 src/api/parse.py 与 docs/wx-login.md §1.6）。旧 API Key 路径的同名调用已随
+    密钥通道一并撤销，但函数本身留下的理由更充分了：它的三态（已扣 / 无需扣 / 不足）
+    正好是两层回退需要的三态，且 `BEGIN IMMEDIATE` 里那句
+    `UPDATE ... WHERE credits>0` 是并发下唯一能保证余额不被扣穿的写法。
+    """
     if not user_id:
         return False
     with transaction(immediate=True) as db:
@@ -153,6 +272,225 @@ def refund_user_credit(user_id):
             (user_id,),
         )
 
+
+def beijing_today():
+    """北京时区自然日的日期串（YYYY-MM-DD）。额度计数的分桶键。"""
+    return beijing_now().date().isoformat()
+
+
+def consume_daily_quota(user_id, day, cap):
+    """原子预占一次当日额度。
+
+    返回 True = 已占；False = 当日额度已用尽。
+    cap 为 None 表示不限（管理员），不计数、不写表。
+    user_id 为假值同样直接放行、完全不记账 —— 这是给非微信的 token 接口
+    留的口子（那条路径本来就没有用户可记）。因此调用方**必须先确认已登录**
+    再调本函数，否则等于把每日硬上限变成不限。注意本函数与
+    reserve_user_credit() 的约定相反：那边 user_id 为假值返回的是 False。
+    """
+    if not user_id or cap is None:
+        # 前半段是非微信 token 路径：没有用户就不记账、直接放行。
+        # 与 reserve_user_credit() 相反（那边假 user_id 返回 False），不是笔误。
+        return True
+    with transaction(immediate=True) as db:
+        row = db.execute(
+            "SELECT count FROM daily_usage WHERE user_id=? AND day=?", (user_id, day)
+        ).fetchone()
+        used = row["count"] if row else 0
+        if used >= cap:
+            return False
+        db.execute(
+            "INSERT INTO daily_usage(user_id,day,count) VALUES(?,?,1) "
+            "ON CONFLICT(user_id,day) DO UPDATE SET count=count+1",
+            (user_id, day),
+        )
+    return True
+
+
+def refund_daily_quota(user_id, day):
+    """退回一次已预占的当日额度（解析失败时调用）。下限 0，不会把计数压成负数。"""
+    if not user_id:
+        return
+    with transaction(immediate=True) as db:
+        db.execute(
+            "UPDATE daily_usage SET count=count-1 WHERE user_id=? AND day=? AND count>0",
+            (user_id, day),
+        )
+
+
+def get_daily_usage(user_id, day):
+    row = get_db().execute(
+        "SELECT count FROM daily_usage WHERE user_id=? AND day=?", (user_id, day)
+    ).fetchone()
+    return row["count"] if row else 0
+
+
+def get_daily_usage_map(user_ids, day):
+    """一次取多个用户的当日已用次数 → {user_id: count}。
+
+    给后台用户列表用：那一页 20 行，逐行调 get_daily_usage 就是 20 条 SQL。
+    没记录的用户**不出现在返回的字典里**，调用方用 .get(uid, 0) 取。
+    """
+    ids = [uid for uid in user_ids if uid]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = get_db().execute(
+        f"SELECT user_id, count FROM daily_usage WHERE day=? AND user_id IN ({placeholders})",
+        [day, *ids],
+    ).fetchall()
+    return {row["user_id"]: row["count"] for row in rows}
+
+
+def parse_utc(value):
+    """宽松解析 ISO 时间串；无法解析返回 None。"""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def get_member_plan(code):
+    """返回生效中的卡种行；卡种不存在或已下架返回 None。"""
+    if not code:
+        return None
+    row = get_db().execute("SELECT * FROM member_plans WHERE code=?", (code,)).fetchone()
+    return row if row is not None and row["active"] else None
+
+
+def is_member(user):
+    """会员是否生效：卡种有效且 member_expires_at 未过期。**会员判定的唯一真相来源**。
+
+    四个调用点：额度上限、/wx/me 展示、签到、开卡逻辑（设计文档 §2.4）。
+    只看 member_expires_at —— 账号本身没有有效期概念（2026-09-22 起 users.expires_at 已废弃，
+    账号的开关由 active 一个字段表达）。
+    """
+    if not user:
+        return False
+    keys = user.keys()
+    plan_code = user["member_plan"] if "member_plan" in keys else None
+    expires = parse_utc(user["member_expires_at"]) if "member_expires_at" in keys else None
+    if not plan_code or expires is None:
+        return False
+    if get_member_plan(plan_code) is None:
+        return False
+    return expires > datetime.now(timezone.utc)
+
+
+def daily_quota_cap(user, plans_by_code=None, free_quota=None):
+    """当日上限：会员取卡种额度，非会员取免费档。始终返回整数。
+
+    `plans_by_code` / `free_quota` 是给后台用户列表用的**预加载缓存**：那一页 20 行，
+    每行都调本函数就会各查一次卡种表与 system_settings。列表页是最常刷新的页面，
+    值得省掉。**不传就是老行为**（各查一次），单用户路径不必关心。
+
+    缓存只省查询、不改判定：`plans_by_code` 按调用方的约定只装**生效中**的卡种，
+    键不存在就照旧落回 get_member_plan()。管理员无上限那件事由调用方负责
+    （access.py 传的是 `None if role=='admin'`），本函数不认角色。
+    """
+    if is_member(user):
+        code = user["member_plan"]
+        if plans_by_code is not None and code in plans_by_code:
+            return int(plans_by_code[code])
+        plan = get_member_plan(code)
+        if plan is not None:
+            return int(plan["daily_quota"])
+    raw = free_quota if free_quota is not None else setting("wx_free_daily_quota", DEFAULT_FREE_DAILY_QUOTA)
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_FREE_DAILY_QUOTA
+
+
+def open_member_card(user_id, plan_code):
+    """开卡/续期。返回 (是否成功, 提示文案, 新到期时间)。
+
+    运营手动开卡与第二期支付回调共用这一个函数（设计文档 §2.4）：
+      · 到期时间叠加：新到期 = max(now, 原到期) + 卡种时长，续费不吞剩余时间
+      · 额度只升不降：已持更高档且未到期时保留原卡种
+    """
+    with transaction(immediate=True) as db:
+        plan = db.execute(
+            "SELECT * FROM member_plans WHERE code=? AND active=1", (plan_code,)
+        ).fetchone()
+        if plan is None:
+            return False, "卡种不存在或已下架", None
+
+        user = db.execute(
+            "SELECT id, member_plan, member_expires_at FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if user is None:
+            return False, "用户不存在", None
+
+        now = datetime.now(timezone.utc)
+        current_expires = parse_utc(user["member_expires_at"])
+        base = current_expires if current_expires and current_expires > now else now
+        new_expires = base + timedelta(days=int(plan["days"]))
+
+        # 必须带 active=1：与上面取新卡种用的是同一个「生效」定义。已下架的旧卡种
+        # 兑现不了任何额度（is_member 走 get_member_plan 会返回 None），拿它的额度去
+        # 比大小只会把用户锁死在免费档 —— 保留它严格劣于换成刚买的卡。
+        current_plan = db.execute(
+            "SELECT daily_quota FROM member_plans WHERE code=? AND active=1", (user["member_plan"],)
+        ).fetchone() if user["member_plan"] else None
+        keep_current = (
+            current_expires is not None
+            and current_expires > now
+            and current_plan is not None
+            and int(current_plan["daily_quota"]) > int(plan["daily_quota"])
+        )
+        stored_plan = user["member_plan"] if keep_current else plan["code"]
+
+        db.execute(
+            "UPDATE users SET member_plan=?, member_expires_at=? WHERE id=?",
+            (stored_plan, new_expires.isoformat(timespec="seconds"), user_id),
+        )
+        return True, f"已开通{plan['name']}", new_expires.isoformat(timespec="seconds")
+
+
+def record_member_card_grant(user_id, plan_code, expires_at, granted_by=None, source="admin"):
+    """写一条开卡记录，返回新行 id；写不进去返回 None。**开卡成功后**由调用方调。
+
+    这里记的是「**这一次开出的卡**」，不是「用户现在持有什么」—— 两者在
+    「已持更高档」时并不相同（open_member_card 的额度只升不降会把原卡种留下），
+    所以 effective_plan_code 单独一列，免得日后照这条记录误判用户档位。
+
+    卡种名称 / 天数 / 额度都是**快照**：卡种表可改可下架，不存快照的话，
+    运营改一次价，历史记录的含义就跟着变了 —— 那正是「对不上账」的来源。
+    下面查卡种**故意不带 active=1**：记的是刚刚开出去的那张卡，运营下一秒把它
+    下架，这条记录也必须还能叫出它的名字。
+
+    审计写失败**不回滚开卡**：卡已经开出并提交了，为了记不上账而把它撤销，
+    比少一行记录更糟。调用方拿到 None 记一条日志即可。
+    """
+    db = get_db()
+    user = db.execute(
+        "SELECT username, member_plan FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    plan = db.execute(
+        "SELECT name, days, daily_quota FROM member_plans WHERE code=?", (plan_code,)
+    ).fetchone()
+    if user is None or plan is None:
+        return None
+    operator = db.execute(
+        "SELECT username FROM users WHERE id=?", (granted_by,)
+    ).fetchone() if granted_by else None
+    cursor = db.execute(
+        "INSERT INTO member_card_grants(user_id,username,plan_code,plan_name,days,daily_quota,"
+        "effective_plan_code,expires_at,source,granted_by,granted_by_name,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            user_id, user["username"], plan_code, plan["name"],
+            int(plan["days"]), int(plan["daily_quota"]), user["member_plan"],
+            expires_at, source, granted_by,
+            operator["username"] if operator else None, utcnow(),
+        ),
+    )
+    db.commit()
+    return cursor.lastrowid
 
 
 def setting(name, default=None):
@@ -555,29 +893,3 @@ def get_top_users(days=7, limit=10):
     ]
 
 
-def get_top_keys(user_id, days=7, limit=10):
-    db = get_db()
-    sql = (
-        "SELECT k.name, k.key, COUNT(l.id) as calls "
-        "FROM request_logs l "
-        "JOIN api_keys k ON k.id = l.api_key_id "
-        "WHERE l.user_id = ? "
-    )
-    params = [user_id]
-    if days > 0:
-        sql += "AND l.created_at >= ? "
-        params.append(beijing_period_start_utc(days))
-    sql += "GROUP BY k.id ORDER BY calls DESC LIMIT ?"
-    params.append(limit)
-
-    rows = db.execute(sql, params).fetchall()
-    max_calls = max((r["calls"] for r in rows), default=1)
-    return [
-        {
-            "name": r["name"],
-            "key_prefix": r["key"][:7] if r["key"] else "",
-            "calls": r["calls"],
-            "pct": round((r["calls"] / max_calls) * 100, 1),
-        }
-        for r in rows
-    ]

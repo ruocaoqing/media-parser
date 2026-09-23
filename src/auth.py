@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import secrets
-import string
 from datetime import datetime, timezone
 from functools import wraps
 from zoneinfo import ZoneInfo
@@ -15,24 +14,16 @@ from src.db import get_db, setting, utcnow
 bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 
-from datetime import datetime, timedelta, timezone
-
-
-def hash_api_key(raw_key):
-    return hashlib.sha256(b"mp_api_key_salt_v1:" + raw_key.encode()).hexdigest()
-
-
-def legacy_hash_api_key(raw_key):
-    try:
-        pepper = current_app.config["SECRET_KEY"].encode()
-        return hmac.new(pepper, raw_key.encode(), hashlib.sha256).hexdigest()
-    except Exception:
-        return ""
-
-
-def generate_api_key(length=24):
-    alphabet = string.ascii_letters + string.digits
-    return "mp-" + "".join(secrets.choice(alphabet) for _ in range(length))
+# 2026-09-22 移除：`hash_api_key()` / `legacy_hash_api_key()` / `generate_api_key()`
+# 随 API Key 通道一并撤销（见 src/api/access.py 顶部说明）。
+#
+# 撤销前它们就已经不是「在用」状态：
+#   * `authenticate_api_key()` 实际是拿明文 `k.key = ?` 去比对的，这两个哈希函数无人调用；
+#   * `generate_api_key()` 只被后台的「新建密钥」表单用到，而那份路由已删。
+# 也就是说，这三个函数是**已经死掉但还没埋**的代码 —— 撤销密钥通道只是让它们显形。
+#
+# `api_keys` 表本身保留（历史日志的 api_key_id 指着它），但不再有任何代码写它：
+# 表在、数据在、可查，只是没有入口。若日后要开程序化通道，请连函数一起重新设计。
 
 
 def csrf_token():
@@ -157,31 +148,19 @@ def register():
                 flash("两次输入的密码不一致", "error")
             else:
                 try:
-                    trial_days = int(setting("default_trial_days", "365"))
                     initial_credits = int(setting("default_initial_credits", "100"))
-                    expires_at = None
-                    if trial_days > 0:
-                        expires_at = (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat(timespec="seconds")
                     db = get_db()
                     db.execute(
-                        "INSERT INTO users(username,password_hash,qps_limit,expires_at,credits,created_at) VALUES(?,?,?,?,?,?)",
-                        (username, generate_password_hash(password), int(setting("default_user_qps", "2")), expires_at, initial_credits, utcnow()),
+                        "INSERT INTO users(username,password_hash,qps_limit,credits,created_at) VALUES(?,?,?,?,?)",
+                        (username, generate_password_hash(password), int(setting("default_user_qps", "2")), initial_credits, utcnow()),
                     )
                     db.commit()
-                    if trial_days > 0:
-                        if initial_credits == -1:
-                            msg = f"注册成功！已自动开启 {trial_days} 天免费试用并享有无限解析额度，请登录"
-                        elif initial_credits > 0:
-                            msg = f"注册成功！已自动开启 {trial_days} 天免费试用并赠送 {initial_credits} 积分，请登录"
-                        else:
-                            msg = f"注册成功！已自动开启 {trial_days} 天免费试用，请登录"
+                    if initial_credits == -1:
+                        msg = "注册成功！账号已开通并享有无限解析额度，请登录"
+                    elif initial_credits > 0:
+                        msg = f"注册成功！账号已开通并赠送 {initial_credits} 积分，请登录"
                     else:
-                        if initial_credits == -1:
-                            msg = "注册成功！账号永久有效并享有无限解析额度，请登录"
-                        elif initial_credits > 0:
-                            msg = f"注册成功！账号永久有效并赠送 {initial_credits} 积分，请登录"
-                        else:
-                            msg = "注册成功！账号永久有效，请登录"
+                        msg = "注册成功！账号已开通，请登录"
                     flash(msg, "success")
                     return redirect(url_for("auth.login"))
                 except Exception as exc:
@@ -273,30 +252,6 @@ def change_password():
 
 
 
-def user_is_expired(user):
-    if user["role"] == "admin":
-        return False
-    if not user["expires_at"]:
-        return False
-    try:
-        return datetime.fromisoformat(user["expires_at"]).replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc)
-    except ValueError:
-        return True
-
-
-def format_user_expiry(user):
-    if not user:
-        return "-"
-    if user["role"] == "admin" or not user["expires_at"]:
-        return "永久有效"
-    formatted = format_local_date(user["expires_at"])
-    if formatted == "-":
-        return "永久有效"
-    if user_is_expired(user):
-        return f"{formatted} (已到期)"
-    return formatted
-
-
 def format_log_time(value):
     """将数据库中以 UTC 保存的时间展示为北京时间。"""
     if not value:
@@ -351,8 +306,6 @@ def render_icon(name, class_name="w-4 h-4"):
 
 def register_template_helpers(app):
     app.jinja_env.globals["csrf_token"] = csrf_token
-    app.jinja_env.globals["user_is_expired"] = user_is_expired
-    app.jinja_env.globals["format_user_expiry"] = format_user_expiry
     app.jinja_env.globals["format_log_time"] = format_log_time
     app.jinja_env.globals["format_local_date"] = format_local_date
     app.jinja_env.globals["api_base_url"] = api_base_url

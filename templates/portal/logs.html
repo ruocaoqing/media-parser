@@ -3,7 +3,7 @@
 {% block title %}请求日志 · 客户控制台{% endblock %}
 {% block page_title %}请求日志{% endblock %}
 {% block console_content %}
-<main class="max-w-7xl mx-auto space-y-6">
+<main class="space-y-6">
     <div id="logs" class="tab-view space-y-6">
         <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -19,7 +19,7 @@
             <!-- 筛选与搜索工具栏 -->
             <form method="get" action="{{ url_for('portal.logs') }}" class="table-toolbar table-filter-form mb-5">
                 <div class="flex flex-wrap items-center gap-2.5">
-                    <input type="text" name="logs_q" placeholder="搜索请求URL/错误码/密钥..." value="{{ logs_table.query_params.q }}" class="filter-input-text px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition w-56 bg-white">
+                    <input type="text" name="logs_q" placeholder="搜索请求URL/错误码..." value="{{ logs_table.query_params.q }}" class="filter-input-text px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition w-56 bg-white">
                     <select name="logs_platform" onchange="this.form.submit()" class="px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition bg-white text-slate-700">
                         <option value="">全部平台</option>
                         {% for item in platforms %}
@@ -61,7 +61,6 @@
                             <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-36" onclick="handleSort('logs', 'created_at')">
                                 时间 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if logs_table.sorting.sort_by=='created_at' else 'text-slate-300' }}">{{ '↑' if logs_table.sorting.sort_by=='created_at' and logs_table.sorting.order=='asc' else ('↓' if logs_table.sorting.sort_by=='created_at' else '↕') }}</span>
                             </th>
-                            <th class="px-3 py-3 whitespace-nowrap w-32">调用 Key</th>
                             <th class="th-sortable px-3 py-3 cursor-pointer select-none hover:text-slate-900 transition whitespace-nowrap w-20" onclick="handleSort('logs', 'platform')">
                                 平台 <span class="sort-icon ml-0.5 {{ 'text-brand font-bold' if logs_table.sorting.sort_by=='platform' else 'text-slate-300' }}">{{ '↑' if logs_table.sorting.sort_by=='platform' and logs_table.sorting.order=='asc' else ('↓' if logs_table.sorting.sort_by=='platform' else '↕') }}</span>
                             </th>
@@ -82,13 +81,6 @@
                                 <input type="checkbox" class="row-checkbox rounded border-slate-300 text-brand focus:ring-brand/20 cursor-pointer" value="{{ log['id'] }}">
                             </td>
                             <td class="px-3 py-3 whitespace-nowrap text-slate-500">{{ format_log_time(log['created_at']) }}</td>
-                            <td class="px-3 py-3 whitespace-nowrap">
-                                {% if log['key'] %}
-                                <span class="font-mono text-[11px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200" title="{{ log['key_name'] or '' }} ({{ log['key'][:11] }}••••••••)">{{ log['key'][:11] }}...</span>
-                                {% else %}
-                                <span class="text-slate-400 text-[11px]">Web 免鉴权</span>
-                                {% endif %}
-                            </td>
                             <td class="px-3 py-3 whitespace-nowrap font-medium text-slate-700">{{ log['platform'] or '-' }}</td>
                             <td class="px-3 py-3 max-w-sm truncate">
                                 {% if log['input_url'] %}
@@ -107,7 +99,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="8" class="text-center py-10 text-slate-400">暂无符合条件的调用记录</td>
+                            <td colspan="7" class="text-center py-10 text-slate-400">暂无符合条件的调用记录</td>
                         </tr>
                         {% endfor %}
                     </tbody>

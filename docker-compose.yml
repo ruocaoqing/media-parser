@@ -15,7 +15,7 @@ services:
     volumes:
       # 将宿主机上的日志映射，便于容器重建后保留日志和排查问题
       - ./logs:/app/logs
-      # 持久化用户、API Key、开关和调用日志
+      # 持久化用户、会员卡、系统开关和调用日志
       - ./data:/app/data
     # 基础运行环境（开箱即用，无需配置 Cookie 即可直接启动）
     environment:
@@ -23,8 +23,15 @@ services:
       - SECRET_KEY=${SECRET_KEY:-}
       - DATABASE_PATH=/app/data/media_parser.db
       - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
-      # 纯 API / 微服务模式（开启后不挂载 Web UI，全接口免 API Key 直接调用且不写请求日志）
+      # 纯 API / 微服务模式（开启后不挂载 Web UI，全接口免鉴权直接调用且不写请求日志）
       - API_ONLY=${API_ONLY:-false}
+      # 微信小程序凭据：environment 是逐项白名单（没有 env_file:），不列在这里
+      # 宿主机 .env 里的值就进不来，wx_configured() 恒为 False，登录永远 503。
+      - WX_APPID=${WX_APPID:-}
+      - WX_APPSECRET=${WX_APPSECRET:-}
+      # 插件扫码登录的小程序码版本：默认 trial（小程序还没发正式版，release 的码扫不开）。
+      # 发布正式版后改回 release（或直接删掉这行用代码默认值）。
+      - WX_QR_ENV_VERSION=${WX_QR_ENV_VERSION:-trial}
       # 可选平台凭据（若在本地 .env 中配置将自动透传进容器）：
       - XHS_COOKIE=${XHS_COOKIE:-}
       - DOUYIN_COOKIE=${DOUYIN_COOKIE:-}

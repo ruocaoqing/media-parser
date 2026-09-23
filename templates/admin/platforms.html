@@ -3,7 +3,7 @@
 {% block title %}支持平台 · 管理员后台{% endblock %}
 {% block page_title %}支持平台{% endblock %}
 {% block console_content %}
-<main class="max-w-7xl mx-auto space-y-6">
+<main class="space-y-6">
     <div id="platforms" class="tab-view space-y-6">
         <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -187,12 +187,12 @@
                 </div>
 
                 <div class="space-y-1">
-                    <label for="edit-platform-qps" class="block text-xs font-semibold text-slate-700">单 Key QPS 限制</label>
+                    <label for="edit-platform-qps" class="block text-xs font-semibold text-slate-700">平台整体 QPS 限制</label>
                     <div class="relative">
                         <input type="number" id="edit-platform-qps" name="qps_limit" placeholder="留空表示不限制" min="1" max="1000" class="w-full px-3.5 py-2 pr-12 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-brand">
                         <span class="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">QPS</span>
                     </div>
-                    <p class="text-[11px] text-slate-400 mt-1">限制单个 API Key 请求此平台的每秒频率上限，留空表示不限制。</p>
+                    <p class="text-[11px] text-slate-400 mt-1">限制此平台整体请求的每秒频率上限（所有用户共用同一个桶，先到先占），留空表示不限制。</p>
                 </div>
 
                 <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">

@@ -5,9 +5,15 @@ from configs.logging_config import get_logger
 from utils.web_fetcher import WebFetcher, UrlParser
 from src.parser_factory import ParserFactory
 from src.api.response import make_response
-from src.db import refund_user_credit, reserve_user_credit
+from src.db import (
+    beijing_today,
+    consume_daily_quota,
+    refund_daily_quota,
+    refund_user_credit,
+    reserve_user_credit,
+)
 from src.api.access import (
-    authenticate_api_key,
+    authenticate_wx_token,
     consume_rate_limit,
     demo_enabled,
     get_client_ip,
@@ -70,16 +76,26 @@ def parse():
 
 @bp.route('/v1/parse', methods=['GET', 'POST'])
 def simple_parse():
-    """面向客户的解析接口，支持 GET 与 POST。"""
+    """面向小程序的解析接口，支持 GET 与 POST。
+
+    2026-09-22 起只有一条鉴别路径：`X-WX-Token`。原先的
+    `Authorization: Bearer <API Key>` 通道已整体撤销（见 access.py 顶部的说明）。
+    """
     if not global_api_enabled():
         return make_response(503, 'API 服务已暂停', None, False, 'API_DISABLED'), 503
     is_api_only = bool(current_app and current_app.config.get('API_ONLY'))
-    access = None
-    if not is_api_only:
-        access, error = authenticate_api_key()
-        if error:
-            status, message, code = error
-            return make_response(status, message, None, False, code), status
+    access, error = authenticate_wx_token()
+    if error:
+        status, message, code = error
+        return make_response(status, message, None, False, code), status
+    if access is None and not is_api_only:
+        # 没有 X-WX-Token 头。撤销密钥通道后这里**不能**再放行 —— 放行就等于
+        # /api/v1/parse 变成完全公开的解析接口，而那正是撤销密钥要堵的那个洞。
+        # 错误码单列 WX_TOKEN_REQUIRED（而不是复用 WX_TOKEN_INVALID）：
+        # 「没带凭证」和「凭证是坏的」对调用方是两件事 —— 前者去登录，后者去清缓存重登。
+        return make_response(401, '请先登录小程序', None, False, 'WX_TOKEN_REQUIRED'), 401
+    # API_ONLY=true 时 access 为 None 是**正常**的：那是自部署的完全无鉴权形态，
+    # 本来就不要求任何凭证，撤销密钥通道后它成了唯一无需令牌的入口。
 
     text = None
     if request.method == 'GET':
@@ -104,6 +120,11 @@ def _execute_parse(text, access):
     status = 500
     credit_reserved = False
     credit_committed = False
+    # 两层次数各有一个预占标记，但一次请求只会占住其中一层：
+    # quota_* 是每日额度层，credit_* 是签到余额层。
+    # credit_committed 是两层的共同提交开关 —— 只有 200 才置位，失败则按层退回。
+    quota_reserved = False
+    quota_day = None
     try:
         if not isinstance(text, str) or not text.strip():
             response, status = make_response(400, '请提供包含分享链接的文本', None, False, 'INVALID_TEXT'), 400
@@ -143,18 +164,30 @@ def _execute_parse(text, access):
             response = make_response(status, message, None, False, code)
             return response, status
 
-        if access and access["user_id"]:
-            reservation = reserve_user_credit(access["user_id"])
-            if reservation is None:
-                response, status = make_response(
-                    402,
-                    '账号解析积分已耗尽，请联系管理员充值',
-                    None,
-                    False,
-                    'INSUFFICIENT_CREDITS',
-                ), 402
-                return response, status
-            credit_reserved = reservation
+        # access 是 None 的情形只有两个：网页体验（/api/parse）与 API_ONLY 自部署模式 ——
+        # 两者都不带任何凭证，因此两层都不预占、不记账、不退款，行为与改造前一致。
+        if access:
+            # 小程序用户是**两层次数**（§1.6）：先扣每日额度，用尽再扣签到余额。
+            # 顺序不能反 —— 每日额度北京 0 点重置、余额不过期，先用会过期的那个、
+            # 把不过期的留作保底；反过来等于白白扔掉当天的免费次数。
+            # 管理员 quota_cap 为 None：consume_daily_quota 直接放行且不记账，永远走不到余额。
+            quota_day = beijing_today()
+            if consume_daily_quota(access["user_id"], quota_day, access.get("quota_cap")):
+                quota_reserved = access.get("quota_cap") is not None
+            else:
+                # 第二层。reserve_user_credit 的三态照用：True 已扣、False 无需扣
+                # （admin 或 credits == -1，等同不限次）、None 才是真的不足。
+                reservation = reserve_user_credit(access["user_id"])
+                if reservation is None:
+                    response, status = make_response(
+                        402,
+                        '今日额度已用完，可签到或开通会员获取更多',
+                        None,
+                        False,
+                        'DAILY_QUOTA_EXCEEDED',
+                    ), 402
+                    return response, status
+                credit_reserved = reservation
 
         # 2. 获取解析器
         parser = ParserFactory.create_parser(platform, real_url)
@@ -263,6 +296,11 @@ def _execute_parse(text, access):
         response, status = make_response(500, '功能太火爆啦，请稍后再试', None, False, 'INTERNAL_ERROR'), 500
         return response, status
     finally:
+        if quota_reserved and not credit_committed:
+            try:
+                refund_daily_quota(access["user_id"], quota_day or beijing_today())
+            except Exception:
+                logger.exception("Reserved daily quota refund failed")
         if credit_reserved and not credit_committed:
             try:
                 refund_user_credit(access["user_id"])
