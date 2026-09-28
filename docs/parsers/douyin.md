@@ -217,6 +217,12 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
   * 在 `bit_rate` 列表中综合评估：$\text{分辨率像素数 (Width} \times \text{Height)} \rightarrow \text{码率 (bit\_rate)} \rightarrow \text{文件体积 (data\_size)} \rightarrow \text{质量类型} \rightarrow \text{直链优先级}$；
   * 优先筛选兼容性最好的 H.264 编码最高画质流，杜绝 Web/移动端跨平台播放黑屏。
 
+### 4.9 播放端点清洗与无水印升清（`playwm` 自动纠正）
+* **`playwm` 端点风险**：抖音分享页 SSR 数据在未下发 `bit_rate` 列表时，默认仅在 `play_addr.url_list` 中下发包含 `/playwm/`（Play With Watermark）的 720p 带水印地址（带有片头作者 ID 和片尾抖音 Logo）；
+* **无水印清洗与 1080P 升清**：
+  * 在 `_extract_best_url_from_play_addr` 中自动将 `/playwm/` 替换为 `/play/`；
+  * 同时将参数中的 `ratio=720p` 自动提升为 `ratio=1080p`，实现直连 1080P 原始无水印纯净流。
+
 ### 4.9 视频 URL 域名收敛（VOD 摇签）
 * **背景**：`url_list[2]` 优选的源站节点常为 play 网关地址（`api-play-hl.amemv.com/aweme/v1/play/...`），客户端请求时会 302 派发到**随机** CDN 节点——实测同一 play 地址 50 次派发出 29 个不同域名（含 `bdcgslb.com` / `jspcdn.cn:20443` 等无法进入小程序 downloadFile 白名单的第三方 PCDN）。且字节签名按节点绑定，对最终地址**更换主机名必返回 403**，域名无法改写、只能重取。
 * **方案**：`src/utils/vod_dispatch.py` 在服务端预先跟随 302 拿到最终 CDN 地址，**并发摇签**（每批 4 个 `Range: bytes=0-0` 轻量探测，`as_completed` 流式检查，命中白名单主机立即返回；未命中再摇下一批，累计最多 12 次）；全部未命中时退回最后一次结果（fail-open，与未开启时行为一致）。挂载于 `get_real_video_url` / `get_video_list` 对外入口，同一次解析内相同地址只摇一次（实例级缓存）。
@@ -266,6 +272,10 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
      2. **耗时断崖式下降**：将失效链接的处理耗时从 **11.3 秒压缩至 ~2 秒**（主要仅包含基础 302 跳转与单次 Web API 判定）；
      3. **精准原因透传**：将官方返回的限制文案（如 `因作品权限或已被删除，无法观看，去看看其他作品吧`）通过 `retdesc` 准确反馈给调用端与终端用户，彻底杜绝无意义的重试刷量。
 
+6. **分享页 SSR 兜底数据下发 `playwm` 带水印端点**：
+   * *现象*：部分未收录于 Feed 推荐流的视频在走移动端分享页 SSR 降级时，SSR `_ROUTER_DATA` 中仅包含 `video.play_addr` 且地址形式为 `/aweme/v1/playwm/?...`（720P 带片头作者水印与片尾抖音 Logo）。
+   * *解法*：解析器在提取播放地址时，统一将 `/playwm/` 路径自动转换为 `/play/`，并同步将 `ratio=720p` 改写为 `ratio=1080p`，保证在任何兜底场景下输出的均为 1080P 真正无水印原画视频。
+
 ---
 
 ## 6. 测试与验证
@@ -273,9 +283,9 @@ abogus = signer.get_abogus(play_url, signer.user_agent)
 * **单元测试文件**：[tests/test_douyin_parser.py](file:///Users/leo/Projects/media-parser/tests/test_douyin_parser.py)
 * **执行测试**：
   ```bash
-  # 运行抖音专项全覆盖单元测试 (24 个用例，含移动端 Feed 主路径、容灾切换、Web API 降级与终端状态短路)
+  # 运行抖音专项全覆盖单元测试 (含移动端 Feed 主路径、容灾切换、Web API 降级、playwm清洗及终端状态短路)
   python -m unittest tests/test_douyin_parser.py
   
-  # 运行全平台回归测试 (300 个用例)
+  # 运行全平台回归测试
   python -m unittest discover -s tests
   ```

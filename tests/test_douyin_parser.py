@@ -1051,6 +1051,20 @@ class DouyinParserTest(unittest.TestCase):
         # 验证空 uifid 时原样返回
         self.assertEqual(DouyinParser._sign_secsdk(url, ""), url)
 
+    def test_extract_best_url_sanitizes_playwm_to_play(self):
+        """测试将 playwm 水印播放地址自动转换为无水印 play 播放地址并升级 ratio 为 1080p"""
+        play_addr = {
+            "uri": "v0d00fg10000dao171fog65tkue6mba0",
+            "url_list": [
+                "https://aweme.snssdk.com/aweme/v1/playwm/?line=0&logo_name=aweme_diversion_search&ratio=720p&video_id=v0d00fg10000dao171fog65tkue6mba0"
+            ]
+        }
+        url = DouyinParser._extract_best_url_from_play_addr(play_addr)
+        self.assertNotIn("/playwm/", url)
+        self.assertIn("/play/", url)
+        self.assertIn("ratio=1080p", url)
+        self.assertNotIn("ratio=720p", url)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -907,17 +907,27 @@ class DouyinParser(BaseParser):
         """
         if not play_addr_dict or not isinstance(play_addr_dict, dict):
             return None
+        target_url = None
         url_list = play_addr_dict.get('url_list') or play_addr_dict.get('download_url_list') or []
         if isinstance(url_list, list) and url_list:
             valid_urls = [u for u in url_list if isinstance(u, str) and u.strip()]
             if len(valid_urls) >= 3 and valid_urls[2]:
-                return valid_urls[2]
-            if valid_urls:
-                return valid_urls[0]
+                target_url = valid_urls[2]
+            elif valid_urls:
+                target_url = valid_urls[0]
+        if target_url:
+            if '/playwm/' in target_url:
+                target_url = target_url.replace('/playwm/', '/play/')
+            if 'ratio=720p' in target_url:
+                target_url = target_url.replace('ratio=720p', 'ratio=1080p')
+            return target_url
+
         uri = play_addr_dict.get('uri')
         if uri and isinstance(uri, str):
             clean_uri = uri.strip()
             if clean_uri.startswith('http'):
+                if '/playwm/' in clean_uri:
+                    clean_uri = clean_uri.replace('/playwm/', '/play/')
                 return clean_uri
             if 'mp3' not in clean_uri.lower():
                 return DouyinParser._build_play_endpoint_url(clean_uri, ratio="1080p")

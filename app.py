@@ -10,6 +10,7 @@ from src.auth import bp as auth_bp, register_template_helpers
 from src.web.portal import bp as portal_bp
 from src.web.admin import bp as admin_bp
 from src.db import init_app as init_database
+from src.utils.proxy_manager import ProxyManager
 from configs.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +45,7 @@ def create_app(config=None):
     app.config['DATABASE'] = os.getenv(
         'DATABASE_PATH', os.path.join(app.instance_path, 'media_parser.db')
     )
+    app.config['JULIANG_PROXY_API_URL'] = os.getenv('JULIANG_PROXY_API_URL', '').strip()
     # 原来是 32 * 1024。小程序头像走 multipart 直传，一张手机头像轻松超过 32KB，
     # 保持 32KB 会让 /api/v1/wx/profile 直接 413（docs/wx-login.md §1.7）。
     # 4MB 只用于让请求体进得来：各接口自己的校验（parse 的 2048 字上限、
@@ -73,6 +75,10 @@ def create_app(config=None):
     if not app.config.get('SECRET_KEY'):
         app.config['SECRET_KEY'] = _load_or_create_secret(database_dir or app.instance_path)
     init_database(app)
+    manager = ProxyManager(app.config["DATABASE"], app.config["JULIANG_PROXY_API_URL"])
+    app.extensions["proxy_manager"] = manager
+    if not app.testing:
+        manager.start()
 
     # 注册蓝图
     app.register_blueprint(api_bp, url_prefix='/api')

@@ -32,6 +32,8 @@ services:
       # 插件扫码登录的小程序码版本：默认 trial（小程序还没发正式版，release 的码扫不开）。
       # 发布正式版后改回 release（或直接删掉这行用代码默认值）。
       - WX_QR_ENV_VERSION=${WX_QR_ENV_VERSION:-trial}
+      # Cookie 触发的动态代理提取地址（上游 #22 代理访问机制），配置说明见 docs/proxy-retry.md
+      - JULIANG_PROXY_API_URL=${JULIANG_PROXY_API_URL:-}
       # 可选平台凭据（若在本地 .env 中配置将自动透传进容器）：
       - XHS_COOKIE=${XHS_COOKIE:-}
       - DOUYIN_COOKIE=${DOUYIN_COOKIE:-}

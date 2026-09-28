@@ -33,6 +33,46 @@ MOCK_NOVEL_HTML = """
 </html>
 """
 
+# 现在的分享落地页只给 30 秒试看:play_url 里带 &start=0&end=30
+MOCK_PREVIEW_HTML = """
+<!doctype html>
+<html>
+<body>
+    <script>
+        window._ROUTER_DATA = {
+            "loaderData": {
+                "video-animation-share_page": {
+                    "pageData": {
+                        "series_data": {
+                            "title": "全家把我当乡下老太，都吓傻了",
+                            "play_url": "https://v3-share.qznovel.com\\u002Fpreview.mp4?a=8662&start=0&end=30"
+                        },
+                        "used_chapter_id": "7679061418129247257"
+                    },
+                    "linkParams": {
+                        "schemeParams": {"vid": "7679061418129247257", "video_id": "7679018384272395289"}
+                    }
+                }
+            }
+        };
+    </script>
+</body>
+</html>
+"""
+
+MOCK_PLAYER_HTML = """
+<!doctype html>
+<html>
+<head>
+    <script type="application/ld+json">
+        {"@type": "VideoObject", "name": "全家把我当乡下老太，都吓傻了 第1集",
+         "contentUrl": "https://v3-hgweb.qznovelvod.com\\u002Ffull.mp4?mime_type=video_mp4",
+         "duration": "PT2M51S"}
+    </script>
+</head>
+</html>
+"""
+
 
 class FanqieParserTest(unittest.TestCase):
 
@@ -65,6 +105,23 @@ class FanqieParserTest(unittest.TestCase):
         self.assertEqual(parser.get_title_content(), "护镖人之无敌镖人！")
         self.assertEqual(parser.get_real_video_url(), "https://v3-share.qznovel.com/real_play.mp4")
         self.assertEqual(parser.get_cover_photo_url(), "https://p3-novel.byteimg.com/cover.image")
+
+    @patch.object(FanqieParser, 'fetch_player_html', return_value=MOCK_PLAYER_HTML)
+    @patch.object(FanqieParser, 'fetch_html_content', return_value=MOCK_PREVIEW_HTML)
+    def test_preview_link_replaced_by_full_video(self, mock_fetch, mock_player):
+        """分享页给试看链接时,要去官网播放器换成完整分集链接。"""
+        parser = FanqieParser("https://novelquickapp.com/s/wQ-MK1vuras/")
+        self.assertEqual(parser.get_real_video_url(), "https://v3-hgweb.qznovelvod.com/full.mp4?mime_type=video_mp4")
+        self.assertEqual(parser.get_title_content(), "全家把我当乡下老太，都吓傻了")
+        mock_player.assert_called_once_with(
+            "https://hongguoduanju.com/player/7679018384272395289/7679061418129247257")
+
+    @patch.object(FanqieParser, 'fetch_player_html', side_effect=RuntimeError("404"))
+    @patch.object(FanqieParser, 'fetch_html_content', return_value=MOCK_PREVIEW_HTML)
+    def test_fallback_to_share_url_when_player_fails(self, mock_fetch, mock_player):
+        """官网播放器拿不到时,不能把视频解析弄失败,继续用分享页那条。"""
+        parser = FanqieParser("https://novelquickapp.com/s/wQ-MK1vuras/")
+        self.assertTrue(parser.get_real_video_url().endswith("start=0&end=30"))
 
 
 if __name__ == '__main__':
