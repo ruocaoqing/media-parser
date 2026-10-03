@@ -10,8 +10,21 @@
 实测字节签名按节点绑定（对最终地址换主机名必 403），因此只能「重摇」不能「改写」：
 服务端并发多次跟随 302，优先返回命中白名单主机的最终地址；
 全部未命中时退回最后一次结果（fail-open，与未开启本功能时的行为一致）。
+
+第二道关（2026-10-03 加）：字节 CDN 的 Referer 白名单按节点配置，同一签名地址
+「无 Referer 206 / 小程序 Referer 403」的节点真实存在（当晚实测 15 个在播节点中
+5 个如此，含 v5-gz2*、v13-cold、v95-*-mc-cold 族；放行的含 v26*、v9*、v27-cold）。
+只查主机白名单会把这类节点当命中交出去 —— 小程序端就是「预览能放、保存 403」。
+因此命中白名单后，再以小程序真实身份（servicewechat.com Referer，微信强制携带、
+客户端改不掉）向该节点取 1 字节复核；拒绝的节点视同未摇中，继续摇。
+
+复核结论按主机名做进程级缓存（节点策略实测粘性强：v5-gz2-a 隔十天两次复测都拦），
+每个新节点只探一次、之后查表；默认 24 小时保质期（DOUYIN_VOD_MINIPROGRAM_TTL 秒），
+到期作废、下次摇到再探 —— 派发池出新名字或节点改配置都不需要人工维护。
 """
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
@@ -30,6 +43,57 @@ _PROBE_HEADERS = {
                    '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36'),
     'Range': 'bytes=0-0',
 }
+
+# 小程序身份复核用的 Referer 默认值：wx.downloadFile 对外一律带
+# https://servicewechat.com/{appid}/{version}/page-frame.html，appid 对应
+# DeMark 小程序（wx90f4713862652c67，公开信息，与上面白名单同属这套小程序的配置）。
+DEFAULT_MINIPROGRAM_REFERER = 'https://servicewechat.com/wx90f4713862652c67/1.0.0/page-frame.html'
+
+
+def get_probe_referer():
+    """小程序身份复核的 Referer；环境变量 DOUYIN_VOD_PROBE_REFERER 优先。"""
+    return os.getenv('DOUYIN_VOD_PROBE_REFERER', '').strip() or DEFAULT_MINIPROGRAM_REFERER
+
+
+def _miniprogram_can_download(url, timeout):
+    """以小程序身份（servicewechat Referer）向最终节点取 1 字节。
+
+    206/200 = 该节点真允许小程序下载；403 = 节点 Referer 白名单不放行，交出去
+    必然「预览能放、保存 403」。探测请求自身异常（超时/网络抖动）时按放行处理：
+    没有证据说明节点拒载，别让复核链路的故障拖垮整个摇签（fail-open，同本模块哲学）。
+    """
+    headers = dict(_PROBE_HEADERS)
+    headers['Referer'] = get_probe_referer()
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=timeout) as resp:
+            return resp.status_code in (200, 206)
+    except Exception:
+        return True
+
+
+# 复核结论的进程级缓存：主机名 -> (可下载?, 记录时间戳)。
+# 存「坏」过时的代价只是多摇几次（无害）；存「好」过时会把 403 节点交出去 ——
+# 所以带保质期，到期作废重探，最坏污染窗口 = 一个 TTL。
+_MINIPROGRAM_VERDICTS = {}
+_MINIPROGRAM_VERDICTS_LOCK = threading.Lock()
+
+
+def _cached_miniprogram_verdict(host, url, timeout):
+    """查表为主：有新鲜结论直接用；没见过（或已过期）才真探一次并记表。
+
+    并发解析撞上同一个新主机时可能各探一次（竞态）——重复探一次是无害的幂等操作，
+    不值得为去重把探测串行化。服务器重启表自然清空，重新遇一个探一个。
+    """
+    ttl = _env_int('DOUYIN_VOD_MINIPROGRAM_TTL', 86400)
+    now = time.time()
+    with _MINIPROGRAM_VERDICTS_LOCK:
+        entry = _MINIPROGRAM_VERDICTS.get(host)
+    if entry is not None and now - entry[1] <= ttl:
+        return entry[0]
+    verdict = _miniprogram_can_download(url, timeout)
+    with _MINIPROGRAM_VERDICTS_LOCK:
+        _MINIPROGRAM_VERDICTS[host] = (verdict, time.time())
+    return verdict
 
 # 默认白名单 = 小程序 downloadFile 合法域名清单中的字节系 VOD 节点（60 个）。
 # 小程序白名单调整后需同步更新此处，或改用环境变量 DOUYIN_VOD_ALLOWED_HOSTS。
@@ -149,7 +213,9 @@ def resolve_play_url(play_url, allowed_hosts=None, batch_size=None,
     """并发摇签：返回 (best_url, hit)。
 
     每批 batch_size 个并发请求，as_completed 流式检查：任一结果命中白名单
-    立即返回，不等批内慢请求；整批未命中再摇下一批，累计最多 max_attempts 次。
+    且通过小程序身份复核（结论按主机缓存跨解析复用，
+    DOUYIN_VOD_MINIPROGRAM_CHECK=0 可关）立即返回，
+    不等批内慢请求；整批未命中再摇下一批，累计最多 max_attempts 次。
     全部未命中返回 (最后一次结果, False)；环境变量关闭本功能时返回 (None, False)。
     """
     if not _env_bool('DOUYIN_VOD_RESOLVE_ENABLED', True):
@@ -159,6 +225,7 @@ def resolve_play_url(play_url, allowed_hosts=None, batch_size=None,
         return None, False
     batch = batch_size or _env_int('DOUYIN_VOD_RESOLVE_BATCH', 4)
     limit = max_attempts or _env_int('DOUYIN_VOD_RESOLVE_MAX_ATTEMPTS', 12)
+    verify_miniprogram = _env_bool('DOUYIN_VOD_MINIPROGRAM_CHECK', True)
 
     done, last_final = 0, None
     while done < limit:
@@ -171,13 +238,18 @@ def resolve_play_url(play_url, allowed_hosts=None, batch_size=None,
                 if not final:
                     continue
                 last_final = final
-                if urlparse(final).netloc in allowed:
-                    logger.info('VOD 摇签命中白名单: %s (第 %d 次尝试)',
-                                urlparse(final).netloc, done)
-                    # 命中即返回，剩余 future 随 with 块收尾取消
-                    for f in futures:
-                        f.cancel()
-                    return final, True
+                host = urlparse(final).netloc
+                if host not in allowed:
+                    continue
+                if verify_miniprogram and not _cached_miniprogram_verdict(host, final, timeout):
+                    logger.info('VOD 摇签命中白名单但节点拒绝小程序下载(403)，重摇: %s', host)
+                    continue
+                logger.info('VOD 摇签命中白名单且小程序可下载: %s (第 %d 次尝试)',
+                            host, done)
+                # 命中即返回，剩余 future 随 with 块收尾取消
+                for f in futures:
+                    f.cancel()
+                return final, True
     if last_final:
         logger.info('VOD 摇签 %d 次未命中白名单，退回最后一次: %s',
                     limit, urlparse(last_final).netloc)
