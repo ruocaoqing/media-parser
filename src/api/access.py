@@ -182,13 +182,13 @@ def demo_enabled():
     return setting("demo_enabled", "1") == "1"
 
 
-def record_request(access, platform, path, status_code, error_code, duration_ms):
+def record_request(access, platform, path, status_code, error_code, duration_ms, media_host=None):
     if (current_app and (current_app.testing or current_app.config.get("TESTING") or current_app.config.get("API_ONLY"))) or "unittest" in sys.modules or "pytest" in sys.modules:
         return
     db = get_db()
     db.execute(
-        "INSERT INTO request_logs(user_id,api_key_id,platform,path,status_code,error_code,duration_ms,input_url,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO request_logs(user_id,api_key_id,platform,path,status_code,error_code,duration_ms,input_url,media_host,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
         (
             access["user_id"] if access else None,
             access["id"] if access else None,
@@ -198,6 +198,7 @@ def record_request(access, platform, path, status_code, error_code, duration_ms)
             error_code,
             duration_ms,
             _request_log_url(),
+            media_host,
             utcnow(),
         ),
     )

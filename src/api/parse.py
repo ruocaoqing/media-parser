@@ -1,4 +1,5 @@
 import time
+from urllib.parse import urlparse
 
 from flask import Blueprint, current_app, jsonify, request
 from configs.logging_config import get_logger
@@ -121,6 +122,7 @@ def _execute_parse(text, access):
     platform = None
     response = None
     status = 500
+    media_host = None
     credit_reserved = False
     credit_committed = False
     # 两层次数各有一个预占标记，但一次请求只会占住其中一层：
@@ -269,6 +271,9 @@ def _execute_parse(text, access):
                 data_dict['full_duration'] = content_data['full_duration']
         
         logger.debug(f'Parse Success for platform {platform}')
+        media_host = _media_host(primary_video_url or content_data.get('audio_url') or (
+            processed_image_list[0].get('url') if processed_image_list and isinstance(processed_image_list[0], dict) else None
+        ))
         response, status = make_response(200, '成功', data_dict, True), 200
         credit_committed = True
         return response, status
@@ -301,6 +306,7 @@ def _execute_parse(text, access):
                     status,
                     payload.get('error_code'),
                     int((time.monotonic() - started) * 1000),
+                    media_host=media_host,
                 )
             except Exception:
                 logger.exception("Request log write failed")
@@ -328,6 +334,17 @@ def _cookie_code(platform):
         '微信视频号': 'WECHAT_CHANNELS_COOKIE_REQUIRED',
         '快手': 'KUAISHOU_COOKIE_REQUIRED',
     }.get(platform, 'COOKIE_REQUIRED')
+
+
+def _media_host(url):
+    """从解析结果的媒体地址提取主机名，供日志与域名分布统计使用。"""
+    if not url or not isinstance(url, str):
+        return None
+    try:
+        host = urlparse(url).netloc
+    except ValueError:
+        return None
+    return host or None
 
 
 def _result_kind(parser, data, platform):

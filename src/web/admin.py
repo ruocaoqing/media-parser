@@ -16,6 +16,7 @@ from src.db import (
     daily_quota_cap,
     get_daily_trend,
     get_daily_usage_map,
+    get_media_host_distribution,
     get_db,
     get_platform_distribution,
     get_top_users,
@@ -93,6 +94,7 @@ def overview():
     settings = {row["key"]: row["value"] for row in db.execute("SELECT * FROM system_settings")}
     chart_data = get_daily_trend(user_id=None, days=days)
     pie_data = get_platform_distribution(user_id=None, days=days)
+    media_host_data = get_media_host_distribution(days=days)
     top_users = get_top_users(days=days, limit=10)
 
     return render_template(
@@ -101,6 +103,7 @@ def overview():
         settings=settings,
         chart_data=chart_data,
         pie_data=pie_data,
+        media_host_data=media_host_data,
         top_users=top_users,
         current_days=days,
         active_nav="overview",
@@ -806,8 +809,8 @@ def logs():
     db = get_db()
     logs_where, logs_params = [], []
     if l_q := request.args.get("logs_q", request.args.get("q", "")).strip():
-        logs_where.append("(l.input_url LIKE ? OR u.username LIKE ? OR l.error_code LIKE ?)")
-        logs_params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
+        logs_where.append("(l.input_url LIKE ? OR u.username LIKE ? OR l.error_code LIKE ? OR l.media_host LIKE ?)")
+        logs_params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
     if l_status := request.args.get("logs_status", request.args.get("status_code", "")).strip():
         if l_status == "200":
             logs_where.append("l.status_code < 400")
@@ -898,8 +901,8 @@ def export_logs():
             pass
     else:
         if l_q := request.args.get("logs_q", request.args.get("q", "")).strip():
-            where_clauses.append("(l.input_url LIKE ? OR u.username LIKE ? OR l.error_code LIKE ?)")
-            params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
+            where_clauses.append("(l.input_url LIKE ? OR u.username LIKE ? OR l.error_code LIKE ? OR l.media_host LIKE ?)")
+            params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
         if l_status := request.args.get("logs_status", request.args.get("status_code", "")).strip():
             if l_status == "200":
                 where_clauses.append("l.status_code < 400")
@@ -923,7 +926,7 @@ def export_logs():
     output = io.StringIO()
     output.write("\ufeff")
     writer = csv.writer(output, lineterminator="\r\n")
-    writer.writerow(("时间", "客户", "平台", "请求路径", "请求 URL", "状态码", "耗时（毫秒）", "错误码"))
+    writer.writerow(("时间", "客户", "平台", "请求路径", "请求 URL", "视频域名", "状态码", "耗时（毫秒）", "错误码"))
 
     cursor = db.execute(
         f"SELECT l.*, u.username FROM request_logs l "
@@ -939,6 +942,7 @@ def export_logs():
                 _safe_csv_cell(row["platform"] or ""),
                 _safe_csv_cell(row["path"]),
                 _safe_csv_cell(row["input_url"] or ""),
+                _safe_csv_cell(row["media_host"] or ""),
                 _safe_csv_cell(row["status_code"]),
                 _safe_csv_cell(row["duration_ms"]),
                 _safe_csv_cell(row["error_code"] or ""),
@@ -983,8 +987,8 @@ def batch_logs():
     if select_mode == "all":
         where_clauses, params = [], []
         if l_q := (request.form.get("logs_q") or request.form.get("q") or "").strip():
-            where_clauses.append("(l.input_url LIKE ? OR u.username LIKE ? OR l.error_code LIKE ?)")
-            params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
+            where_clauses.append("(l.input_url LIKE ? OR u.username LIKE ? OR l.error_code LIKE ? OR l.media_host LIKE ?)")
+            params.extend([f"%{l_q}%", f"%{l_q}%", f"%{l_q}%", f"%{l_q}%"])
         if l_status := (request.form.get("logs_status") or request.form.get("status_code") or "").strip():
             if l_status == "200":
                 where_clauses.append("l.status_code < 400")

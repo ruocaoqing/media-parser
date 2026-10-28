@@ -64,6 +64,12 @@ CREATE INDEX IF NOT EXISTS idx_rate_limit_bucket_time ON rate_limit_buckets(buck
 DEFAULT_FREE_DAILY_QUOTA = 10
 DEFAULT_CHECKIN_BONUS = 10
 
+# 媒体域名列与 users 的新列同理：不能写进 SCHEMA（CREATE TABLE IF NOT EXISTS 对
+# 已有表不生效），统一由 _ensure_column 在启动时补齐，保证新旧库一致。
+NEW_LOG_COLUMNS = (
+    ("media_host", "TEXT"),
+)
+
 
 # 新表与新索引单独成段：它们要在 users 的新列补齐之后才能建
 # （idx_users_openid 引用的 openid 列由 _ensure_column 添加，不是 SCHEMA 自带的）
@@ -208,6 +214,8 @@ def init_db():
     db.executescript(SCHEMA)
     for column, ddl in NEW_USER_COLUMNS:
         _ensure_column(db, "users", column, ddl)
+    for column, ddl in NEW_LOG_COLUMNS:
+        _ensure_column(db, "request_logs", column, ddl)
     db.executescript(SCHEMA_EXTRA)
     defaults = {
         "global_api_enabled": "1",
@@ -777,6 +785,38 @@ def get_platform_distribution(user_id=None, days=7):
     sql += "GROUP BY platform_name ORDER BY calls DESC"
 
     rows = db.execute(sql, params).fetchall()
+
+    return _build_donut(rows)
+
+
+def get_media_host_distribution(days=7):
+    """统计解析结果的视频域名分布，只看成功的 200 请求。
+
+    media_host 只在解析成功且有媒体时写入；失败请求（如 MEDIA_NOT_FOUND）没有
+    域名可言，混进图里只会制造噪音。无媒体的成功请求（纯文案等）归入「未解析出媒体」。
+    """
+    db = get_db()
+    sql = (
+        "SELECT COALESCE(NULLIF(media_host, ''), '未解析出媒体') as platform_name, "
+        "COUNT(*) as calls, "
+        "1 as successes "
+        "FROM request_logs "
+    )
+    params = []
+    where_clauses = ["status_code < 400"]
+    if days > 0:
+        where_clauses.append("created_at >= ?")
+        params.append(beijing_period_start_utc(days))
+
+    sql += "WHERE " + " AND ".join(where_clauses) + " "
+    sql += "GROUP BY platform_name ORDER BY calls DESC"
+
+    rows = db.execute(sql, params).fetchall()
+    return _build_donut(rows)
+
+
+def _build_donut(rows):
+    """把分组统计行转成前端环形图数据；平台分布与媒体域名分布共用同一几何。"""
     total_calls = sum(r["calls"] for r in rows) if rows else 0
 
     PALETTE = [

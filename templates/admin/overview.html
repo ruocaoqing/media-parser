@@ -133,8 +133,8 @@
             </div>
         </div>
 
-        <!-- 下方双栏：平台使用分布（左） + 活跃客户榜 Top 10（右） -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 下方三栏：平台使用分布 / 视频域名分布 / 活跃客户榜 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             <!-- 左侧：平台使用分布 -->
             <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
                 <div class="mb-5">
@@ -195,7 +195,66 @@
                 {% endif %}
             </div>
 
-            <!-- 右侧：活跃客户榜 Top 10 -->
+            <!-- 右侧：视频域名分布 -->
+            <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
+                <div class="mb-5">
+                    <h2 class="text-base font-bold text-slate-900">视频域名分布</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                        {% if current_days == 0 %}全部历史解析结果媒体域名分布{% else %}近 {{ current_days }} 天解析结果媒体域名分布{% endif %}
+                    </p>
+                </div>
+
+                {% if media_host_data['total_calls'] == 0 %}
+                <div class="text-center py-12 text-slate-400 text-xs">
+                    <svg class="w-10 h-10 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 8v4l3 3" />
+                    </svg>
+                    <div>当前时间范围内暂无媒体域名数据</div>
+                </div>
+                {% else %}
+                <div class="pie-wrapper" id="admin-media-host-dist">
+                    <div class="pie-svg-box relative w-56 h-56 mx-auto">
+                        <svg viewBox="0 0 200 200" class="w-full h-full">
+                            {% for item in media_host_data['items'] %}
+                            <path d="{{ item['path_d'] }}" fill="{{ item['color'] }}" class="pie-slice transition-opacity hover:opacity-80 cursor-pointer" 
+                                  data-platform="{{ item['platform'] }}" 
+                                  data-calls="{{ item['calls_formatted'] }}" 
+                                  data-percent="{{ item['percentage'] }}%"
+                                  data-successes="{{ item['successes_formatted'] }}"
+                                  data-failures="{{ item['failures_formatted'] }}"
+                                  data-rate="{{ item['success_rate'] }}%"
+                                  data-color="{{ item['color'] }}">
+                            </path>
+                    {% endfor %}
+                        </svg>
+                        <div class="pie-center-text absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center select-none px-2">
+                            <div class="pie-center-lbl text-xs text-slate-500 font-medium truncate max-w-[140px] transition-colors duration-150" id="admin-media-pie-lbl">总解析量</div>
+                            <div class="pie-center-val text-xl font-bold text-slate-900 mt-0.5 tracking-tight transition-all duration-150" id="admin-media-pie-val">{{ media_host_data['total_calls_formatted'] or media_host_data['total_calls'] }} 次</div>
+                            <div class="pie-center-sub text-[11px] text-slate-400 mt-0.5 min-h-[16px] font-medium transition-colors duration-150" id="admin-media-pie-sub"></div>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 mt-5 pt-3 border-t border-slate-100">
+                        {% for item in media_host_data['items'] %}
+                        <div class="pie-pill-item inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-slate-100 cursor-pointer transition text-xs font-medium text-slate-600 hover:text-slate-900 select-none" 
+                             data-platform="{{ item['platform'] }}" 
+                             data-calls="{{ item['calls_formatted'] }}" 
+                             data-percent="{{ item['percentage'] }}%"
+                             data-successes="{{ item['successes_formatted'] }}"
+                             data-failures="{{ item['failures_formatted'] }}"
+                             data-rate="{{ item['success_rate'] }}%"
+                             data-color="{{ item['color'] }}">
+                            <span class="w-2 h-2 rounded-full shrink-0" style="background:{{ item['color'] }}"></span>
+                            <span class="truncate">{{ item['platform'] }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- 第三栏：活跃客户榜 Top 10 -->
             <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
                 <div class="mb-5">
                     <h2 class="text-base font-bold text-slate-900">活跃客户调取榜 (Top 10)</h2>
