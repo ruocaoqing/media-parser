@@ -1,5 +1,7 @@
 import io
+import hashlib
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from PIL import Image
@@ -125,3 +127,41 @@ def test_remaining_server_tools(tmp_path, tool_type, options, count):
     served = client.get(job["results"][0]["url"])
     assert served.status_code == 200
     assert len(served.data) > 0
+
+
+def test_uploads_do_not_consume_parse_qps(tmp_path):
+    """一次拼图/长图会连续上传多张图，不能因为默认 QPS=1 被解析限流挡住。"""
+    app, client = _client(tmp_path)
+    app.config["API_ONLY"] = False
+    token = "media-tools-test-token"
+    with app.app_context():
+        from src.db import get_db, utcnow
+        db = get_db()
+        cur = db.execute(
+            "INSERT INTO users(username,password_hash,role,active,qps_limit,credits,created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            ("qps_user", "!test", "user", 1, 1, 100, utcnow()),
+        )
+        user_id = cur.lastrowid
+        db.execute(
+            "INSERT INTO wx_sessions(token_hash,user_id,session_key,created_at,expires_at,last_seen_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                user_id,
+                "test-session-key",
+                utcnow(),
+                (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                utcnow(),
+            ),
+        )
+        db.commit()
+
+    for index in range(3):
+        response = client.post(
+            "/api/v1/media-tools/uploads",
+            data={"file": (io.BytesIO(_png()), f"{index}.png")},
+            content_type="multipart/form-data",
+            headers={"X-WX-Token": token},
+        )
+        assert response.status_code == 200, response.get_data(as_text=True)

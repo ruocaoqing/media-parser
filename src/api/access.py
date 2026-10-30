@@ -116,7 +116,7 @@ def get_client_ip():
 # 而不是把这套自助注册的密钥复活。
 
 
-def authenticate_wx_token():
+def authenticate_wx_token(enforce_rate_limit=True):
     """校验小程序登录令牌。
 
     返回三态：
@@ -146,10 +146,11 @@ def authenticate_wx_token():
     # 第四道：限流主体是 user:{id}。撤销密钥通道后不再有第二个主体，
     # 但**主体名逐字保持不变** —— 改名的代价是限流桶换键，老桶里的计数当场失效，
     # 而原名没有任何坏处。
-    limits = [(f"user:{row['id']}", row["qps_limit"], 1)]
-    exceeded = consume_rate_limits(limits)
-    if exceeded:
-        return None, (429, f"请求过于频繁，当前账号限制为 {row['qps_limit']} QPS", "RATE_LIMITED")
+    if enforce_rate_limit:
+        limits = [(f"user:{row['id']}", row["qps_limit"], 1)]
+        exceeded = consume_rate_limits(limits)
+        if exceeded:
+            return None, (429, f"请求过于频繁，当前账号限制为 {row['qps_limit']} QPS", "RATE_LIMITED")
 
     db.execute("UPDATE wx_sessions SET last_seen_at=? WHERE token_hash=?",
                (utcnow(), row["token_hash"]))

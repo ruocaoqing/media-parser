@@ -27,7 +27,7 @@ from flask import Blueprint, current_app, request, send_file
 from PIL import Image, ImageDraw, ImageOps
 
 from configs.logging_config import get_logger
-from src.api.access import authenticate_wx_token
+from src.api.access import authenticate_wx_token, consume_rate_limit
 from src.api.response import make_response
 from src.db import (
     beijing_today,
@@ -84,12 +84,16 @@ def _base_dir() -> str:
 
 
 def _auth():
-    access, error = authenticate_wx_token()
+    # 创作工具一次任务会连续上传多张图片；单张上传不应挤占解析接口的 QPS 配额。
+    access, error = authenticate_wx_token(enforce_rate_limit=False)
     if error:
         status, message, code = error
         return None, (make_response(status, message, None, False, code), status)
     if access is None and not current_app.config.get("API_ONLY"):
         return None, (make_response(401, "请先登录小程序", None, False, "WX_TOKEN_REQUIRED"), 401)
+    # 媒体工具不占用解析 QPS，但保留一道较宽松的上传/轮询限流，防止批量刷接口。
+    if access and access.get("user_id") and not consume_rate_limit(f"media:{access['user_id']}", 30, 1):
+        return None, (make_response(429, "请求过于频繁，请稍后重试", None, False, "RATE_LIMITED"), 429)
     return access, None
 
 
