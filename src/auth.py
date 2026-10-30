@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from zoneinfo import ZoneInfo
 
@@ -111,8 +111,8 @@ def setup():
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
             confirm_password = request.form.get("confirm_password", "")
-            if len(username) < 3 or len(password) < 8:
-                flash("用户名至少 3 位，密码至少 8 位", "error")
+            if len(username) < 3 or len(password) < 6:
+                flash("用户名至少 3 位，密码至少 6 位", "error")
             elif password != confirm_password:
                 flash("两次输入的密码不一致", "error")
             else:
@@ -142,27 +142,47 @@ def register():
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
             confirm_password = request.form.get("confirm_password", "")
-            if len(username) < 3 or len(password) < 8:
-                flash("用户名至少 3 位，密码至少 8 位", "error")
+            if len(username) < 3 or len(password) < 6:
+                flash("用户名至少 3 位，密码至少 6 位", "error")
             elif password != confirm_password:
                 flash("两次输入的密码不一致", "error")
             else:
                 try:
+                    trial_days = int(setting("default_trial_days", "365"))
                     initial_credits = int(setting("default_initial_credits", "100"))
+                    expires_at = None
+                    if trial_days > 0:
+                        expires_at = (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat(timespec="seconds")
                     db = get_db()
-                    db.execute(
-                        "INSERT INTO users(username,password_hash,qps_limit,credits,created_at) VALUES(?,?,?,?,?)",
-                        (username, generate_password_hash(password), int(setting("default_user_qps", "2")), initial_credits, utcnow()),
+                    cur = db.execute(
+                        "INSERT INTO users(username,password_hash,qps_limit,expires_at,credits,created_at) VALUES(?,?,?,?,?,?)",
+                        (username, generate_password_hash(password), int(setting("default_user_qps", "2")), expires_at, initial_credits, utcnow()),
                     )
+                    user_id = cur.lastrowid
                     db.commit()
-                    if initial_credits == -1:
-                        msg = "注册成功！账号已开通并享有无限解析额度，请登录"
-                    elif initial_credits > 0:
-                        msg = f"注册成功！账号已开通并赠送 {initial_credits} 积分，请登录"
+
+                    # 自动登录并签发会话
+                    session.clear()
+                    session["user_id"] = user_id
+                    session.permanent = True
+
+                    # 对应场景文案：
+                    # A（赠送额度，无时间限制）: 欢迎使用 Media Parser！已发放 {credits} 点免费额度，前往「API 密钥」获取凭证
+                    # B（无限额度，无到期）: 欢迎使用 Media Parser！无限额度已启用，前往「API 密钥」获取凭证
+                    # C（限时试用，固定额度）: 欢迎使用 Media Parser！试用开通，{credits} 点额度已发放，前往「API 密钥」获取凭证
+                    # D（限时试用，无限额度）: 欢迎使用 Media Parser！试用开通，无限额度已启用，前往「API 密钥」获取凭证
+                    if trial_days > 0:
+                        if initial_credits == -1:
+                            msg = "欢迎使用 Media Parser！试用开通，无限额度已启用，前往「API 密钥」获取凭证"
+                        else:
+                            msg = f"欢迎使用 Media Parser！试用开通，{initial_credits} 点额度已发放，前往「API 密钥」获取凭证"
                     else:
-                        msg = "注册成功！账号已开通，请登录"
+                        if initial_credits == -1:
+                            msg = "欢迎使用 Media Parser！无限额度已启用，前往「API 密钥」获取凭证"
+                        else:
+                            msg = f"欢迎使用 Media Parser！已发放 {initial_credits} 点免费额度，前往「API 密钥」获取凭证"
                     flash(msg, "success")
-                    return redirect(url_for("auth.login"))
+                    return redirect(url_for("portal.dashboard"))
                 except Exception as exc:
                     if "UNIQUE" not in str(exc).upper():
                         raise
@@ -231,8 +251,8 @@ def change_password():
 
     if not check_password_hash(g.user["password_hash"], old_password):
         flash("原密码错误", "error")
-    elif len(new_password) < 8:
-        flash("新密码至少需要 8 位", "error")
+    elif len(new_password) < 6:
+        flash("新密码至少需要 6 位", "error")
     elif new_password != confirm_password:
         flash("两次输入的新密码不一致", "error")
     else:

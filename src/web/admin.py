@@ -40,6 +40,13 @@ def _positive_int(value, default=1, maximum=1000):
         return default
 
 
+def _non_negative_int(value, default=0, maximum=9999):
+    try:
+        return max(0, min(int(value), maximum))
+    except (TypeError, ValueError):
+        return default
+
+
 def _positive_page(value):
     try:
         return max(1, int(value))
@@ -134,6 +141,10 @@ def update_settings():
     for name in ("global_api_enabled", "homepage_enabled", "demo_enabled", "registration_enabled", "api_tip_enabled"):
         set_setting(name, "1" if request.form.get(name) else "0")
     set_setting("default_user_qps", _positive_int(request.form.get("default_user_qps"), 2))
+    if request.form.get("chk_unlimited_trial") == "1" or request.form.get("default_trial_days") == "0":
+        set_setting("default_trial_days", 0)
+    else:
+        set_setting("default_trial_days", _non_negative_int(request.form.get("default_trial_days"), 365, 9999))
     set_setting("wx_free_daily_quota", _positive_int(request.form.get("wx_free_daily_quota"), DEFAULT_FREE_DAILY_QUOTA, 100000))
     set_setting("wx_checkin_bonus", _positive_int(request.form.get("wx_checkin_bonus"), DEFAULT_CHECKIN_BONUS, 100000))
 
@@ -155,7 +166,38 @@ def update_settings():
     set_setting("api_tip_website", (request.form.get("api_tip_website") or "").strip() or "https://github.com/ucmao/media-parser")
     set_setting("api_tip_notice", (request.form.get("api_tip_notice") or "").strip() or "本接口由开源项目 media-parser 提供服务")
 
+    # 保存平台 Cookie 覆盖凭据及动态代理 API 地址
+    cookie_keys_saved = []
+    for key in request.form:
+        if key.startswith("cookie_") or key == "dynamic_proxy_api_url":
+            set_setting(key, (request.form.get(key) or "").strip())
+            if key.startswith("cookie_"):
+                cookie_keys_saved.append(key)
+
     db.commit()
+
+    # Cookie 保存即触发本地字段校验，巡检页即时获得最新结论。
+    if cookie_keys_saved:
+        from src.utils.cookie_registry import COOKIE_REGISTRY, check_cookie_fields, record_probe
+
+        for key in cookie_keys_saved:
+            for platform_key, entry in COOKIE_REGISTRY.items():
+                if key in entry["db_keys"]:
+                    # 元宝/视频号双键共享一条凭据：两键皆空时才视为未配置。
+                    combined = "".join(
+                        (setting(db_key) or "") for db_key in entry["db_keys"]
+                    ).strip()
+                    if not combined:
+                        record_probe(platform_key, "not_configured", "field_check", "凭据已清空")
+                    else:
+                        field = check_cookie_fields(platform_key)
+                        record_probe(
+                            platform_key,
+                            "healthy" if field["status"] == "ok" else field["status"],
+                            "field_check",
+                            field["detail"],
+                        )
+                    break
 
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest" or "application/json" in request.headers.get("Accept", "")
     if is_ajax:
@@ -163,6 +205,162 @@ def update_settings():
 
     flash("系统设置已保存", "success")
     return redirect(url_for("admin.settings"))
+
+
+# ----------------------------------------------------------------------
+# 2.5 Cookie 凭据巡检 (Cookie Inspection)
+# ----------------------------------------------------------------------
+
+def _overview_payload():
+    from src.utils.cookie_registry import build_finding, build_overview
+
+    overview = build_overview()
+    overview["finding"] = build_finding(overview)
+    return overview
+
+
+@bp.get("/cookies")
+@admin_required
+def cookies():
+    return render_template(
+        "admin/cookies.html",
+        overview=_overview_payload(),
+        active_nav="cookies",
+    )
+
+
+@bp.get("/api/cookies/overview")
+@admin_required
+def cookies_overview_api():
+    return jsonify({"succ": True, "data": _overview_payload()})
+
+
+@bp.post("/api/cookies/field-check")
+@admin_required
+@csrf_protected
+def cookies_field_check():
+    """对单平台重跑本地字段校验（零网络），刷新巡检结论。"""
+    from src.utils.cookie_registry import (
+        COOKIE_REGISTRY, check_cookie_fields, get_cookie_source, record_probe,
+    )
+
+    platform_key = (request.json or {}).get("platform") if request.is_json else request.form.get("platform")
+    if platform_key not in COOKIE_REGISTRY:
+        return jsonify({"succ": False, "message": "未注册的平台凭据"}), 400
+
+    source = get_cookie_source(platform_key)
+    if source == "none":
+        record_probe(platform_key, "not_configured", "field_check", "未配置凭据")
+        return jsonify({"succ": True, "data": {"status": "not_configured"}})
+
+    field = check_cookie_fields(platform_key)
+    record_probe(
+        platform_key,
+        "healthy" if field["status"] == "ok" else field["status"],
+        "field_check",
+        field["detail"],
+    )
+    return jsonify({"succ": True, "data": {"status": field["status"], "missing": field["missing"]}})
+
+
+@bp.post("/api/cookies/credential")
+@admin_required
+@csrf_protected
+def cookies_credential():
+    """巡检页行内保存单平台 Cookie（不经过 settings 全量表单，避免重置无关设置）。"""
+    from src.utils.cookie_registry import (
+        COOKIE_REGISTRY, check_cookie_fields, get_cookie_source, record_probe,
+    )
+
+    platform_key = (request.json or {}).get("platform") if request.is_json else request.form.get("platform")
+    value = ((request.json or {}).get("value") if request.is_json else request.form.get("value")) or ""
+    value = value.strip()
+    entry = COOKIE_REGISTRY.get(platform_key)
+    if not entry:
+        return jsonify({"succ": False, "message": "未注册的平台凭据"}), 400
+
+    # 弹窗同时提交凭据与样例，先校验链接，避免链接报错时凭据已经被修改。
+    form = (request.json or {}) if request.is_json else request.form
+    if "canary_url" in form:
+        from utils.web_fetcher import UrlParser
+
+        canary_url = (form.get("canary_url") or "").strip()
+        if canary_url:
+            detected = UrlParser.get_platform(canary_url)
+            message = (
+                "链接无法识别平台，请粘贴完整的分享链接" if not detected
+                else "测试链接与当前凭据平台不匹配" if detected not in entry["log_names"]
+                else None
+            )
+            if message:
+                return jsonify({"succ": False, "message": message, "field": "canary_url"}), 400
+        set_setting(entry["canary_setting"], canary_url)
+
+    db_key = entry["db_keys"][0]  # 元宝/视频号共享凭据，写入设置页主键即可
+    set_setting(db_key, value)
+    get_db().commit()
+
+    source = get_cookie_source(platform_key)
+    if source == "none":
+        record_probe(platform_key, "not_configured", "field_check", "凭据已清空")
+        status, missing = "not_configured", []
+    else:
+        field = check_cookie_fields(platform_key)
+        status = "unverified" if field["status"] == "ok" else field["status"]
+        missing = field["missing"]
+        record_probe(platform_key, status, "field_check", field["detail"])
+    return jsonify({"succ": True, "data": {"status": status, "missing": missing}})
+
+
+@bp.post("/api/cookies/probe")
+@admin_required
+@csrf_protected
+def cookies_probe():
+    """单平台金丝雀双跑对照探针（真实出网，含 5 分钟防抖）。"""
+    from src.utils.cookie_prober import probe_platform
+
+    platform_key = (request.json or {}).get("platform") if request.is_json else request.form.get("platform")
+    if not platform_key:
+        return jsonify({"succ": False, "message": "缺少 platform 参数"}), 400
+    result = probe_platform(platform_key)
+    if result["status"] == "debounced":
+        return jsonify({"succ": False, "message": result["detail"]["error"], "data": result}), 429
+    return jsonify({"succ": True, "data": result})
+
+
+@bp.post("/api/cookies/canary")
+@admin_required
+@csrf_protected
+def cookies_canary():
+    """设置平台金丝雀链接。"""
+    from src.utils.cookie_registry import COOKIE_REGISTRY, record_probe
+    from src.utils.cookie_samples import default_probe_sample
+    from utils.web_fetcher import UrlParser
+
+    platform_key = (request.json or {}).get("platform") if request.is_json else request.form.get("platform")
+    url = ((request.json or {}).get("url") if request.is_json else request.form.get("url")) or ""
+    url = url.strip()
+    if platform_key not in COOKIE_REGISTRY:
+        return jsonify({"succ": False, "message": "未注册的平台凭据"}), 400
+
+    entry = COOKIE_REGISTRY[platform_key]
+    if not url:
+        set_setting(entry["canary_setting"], "")
+        record_probe(platform_key, "unverified", "field_check", "已恢复默认测试链接，请重新验证")
+        get_db().commit()
+        message = "已恢复样本库默认链接" if default_probe_sample(platform_key) else "已清空测试链接，暂无默认样例，请填写链接后验证"
+        return jsonify({"succ": True, "message": message})
+    detected_platform = UrlParser.get_platform(url)
+    if not detected_platform:
+        return jsonify({"succ": False, "message": "链接无法识别平台，请粘贴完整的分享链接"}), 400
+
+    if detected_platform not in entry["log_names"]:
+        return jsonify({"succ": False, "message": "测试链接与当前凭据平台不匹配"}), 400
+
+    set_setting(entry["canary_setting"], url)
+    record_probe(platform_key, "unverified", "field_check", "测试样例链接已更新，请重新验证")
+    get_db().commit()
+    return jsonify({"succ": True, "message": "金丝雀链接已保存"})
 
 
 # ----------------------------------------------------------------------
@@ -433,8 +631,8 @@ def reset_password(user_id):
         return redirect(url_for("admin.users"))
 
     new_password = request.form.get("new_password", "")
-    if len(new_password) < 8:
-        flash("重置密码至少需要 8 位", "error")
+    if len(new_password) < 6:
+        flash("重置密码至少需要 6 位", "error")
         return redirect(url_for("admin.users"))
 
     db.execute(

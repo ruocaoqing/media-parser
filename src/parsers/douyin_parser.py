@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from configs.logging_config import get_logger
 from src.parser_factory import register_parser
 from src.parsers.base_parser import BaseParser
-from src.utils.cookie_manager import get_platform_cookie
+from src.utils.cookie_manager import get_platform_cookie, cookies_suppressed
 from utils.signer.bytedance.bogus_signer import BogusSigner
 from utils.web_fetcher import UrlParser
 from src.utils.vod_dispatch import resolve_media_url
@@ -201,6 +201,8 @@ class DouyinParser(BaseParser):
         3. 用户直接将 256 位 uifid 字符串传入 DOUYIN_COOKIE (无 = 号，长度 >= 32)
         4. 从 session.cookies 中提取
         """
+        if cookies_suppressed():
+            return ""
         # 1. 优先读取独立环境变量
         for env_key in ("DOUYIN_UIFID", "DY_UIFID"):
             env_val = os.getenv(env_key, "").strip().strip("'\"")

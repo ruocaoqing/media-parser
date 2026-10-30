@@ -2,12 +2,14 @@
 
 import ipaddress
 import os
+import re
 import sqlite3
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 
 import requests
 from urllib3.util import Timeout
@@ -58,9 +60,22 @@ class ProxyManager:
         with self.connection() as db:
             db.executescript(SCHEMA)
 
+    def get_active_api_url(self):
+        """三级优先级：后台在线配置 (system_settings) > .env 环境变量 > 留空"""
+        try:
+            with self.connection() as db:
+                row = db.execute(
+                    "SELECT value FROM system_settings WHERE key IN ('dynamic_proxy_api_url', 'cookie_dynamic_proxy_api_url') AND value != '' LIMIT 1"
+                ).fetchone()
+                if row and row["value"].strip():
+                    return row["value"].strip()
+        except Exception:
+            pass
+        return (self.api_url or "").strip()
+
     @property
     def enabled(self):
-        return bool(self.api_url)
+        return bool(self.get_active_api_url())
 
     @contextmanager
     def connection(self, write=False):
@@ -142,17 +157,73 @@ class ProxyManager:
 
     @staticmethod
     def decode(payload, started):
-        if not isinstance(payload, dict) or payload.get("code") != 200:
-            raise ValueError("代理供应商返回失败")
-        rows = payload.get("data", {}).get("proxy_list")
-        if not isinstance(rows, list) or not rows:
-            raise ValueError("代理列表为空")
-        row = rows[0]
-        ip = str(ipaddress.IPv4Address(row["ip"]))
-        port = int(row["port"])
-        remain = float(row["ip_remain"])
+        """通用代理解码器：支持 巨量、芝麻、青果、Data5U、多米 等各种 JSON 结构以及 TXT 文本。"""
+        ip = None
+        port = None
+        remain = None
+
+        # 1. 如果输入为纯文本 TXT（或字符串格式）
+        if isinstance(payload, str):
+            match = re.search(r"(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})", payload)
+            if match:
+                ip = match.group(1)
+                port = int(match.group(2))
+                remain = 300.0
+
+        # 2. 如果输入为 JSON (dict)
+        elif isinstance(payload, dict):
+            # 校验响应 Code / Status
+            code = payload.get("code")
+            success = payload.get("success")
+            valid_code = code in (200, 0, "200", "0", "SUCCESS") or success is True
+            if not valid_code and code is not None:
+                raise ValueError(f"代理供应商返回失败: code={code}, msg={payload.get('msg') or payload.get('message')}")
+
+            # 寻找代理列表项 (兼容不同数据节点的层级)
+            rows = None
+            data_field = payload.get("data")
+            if isinstance(data_field, dict):
+                rows = data_field.get("proxy_list") or data_field.get("list") or data_field.get("proxies") or [data_field]
+            elif isinstance(data_field, list):
+                rows = data_field
+            elif isinstance(payload.get("proxy_list"), list):
+                rows = payload.get("proxy_list")
+
+            if isinstance(rows, list) and len(rows) > 0 and isinstance(rows[0], dict):
+                row = rows[0]
+                ip = str(row.get("ip") or row.get("outip") or row.get("server") or row.get("host") or "")
+                port = int(row.get("port") or row.get("server_port") or 0)
+
+                # 解析有效期 (ip_remain / ttl / expire_seconds / expire_time / deadline)
+                has_explicit_remain = "ip_remain" in row or "ttl" in row or "expire_seconds" in row
+                raw_remain = row.get("ip_remain") if "ip_remain" in row else (row.get("ttl") if "ttl" in row else row.get("expire_seconds"))
+
+                if has_explicit_remain:
+                    try:
+                        remain = float(raw_remain)
+                    except (ValueError, TypeError):
+                        raise ValueError("代理端口或有效期无效")
+                else:
+                    exp_val = row.get("expire_time") or row.get("deadline")
+                    if isinstance(exp_val, (int, float)) and exp_val > 1000000000:
+                        remain = float(exp_val) - started
+                    elif isinstance(exp_val, str):
+                        try:
+                            dt = datetime.strptime(exp_val.strip(), "%Y-%m-%d %H:%M:%S")
+                            remain = dt.timestamp() - started
+                        except ValueError:
+                            pass
+
+                if remain is None:
+                    remain = 300.0  # 其它未明示有效期的结构给保底默认 5 分钟
+
+        if not ip or not port:
+            raise ValueError("未能提取到有效的代理 IP/端口")
+
+        ip = str(ipaddress.IPv4Address(ip))
         if not 1 <= port <= 65535 or not 10 < remain < float("inf"):
             raise ValueError("代理端口或有效期无效")
+
         expires = started + remain
         if expires <= time.time() + 10:
             raise ValueError("代理剩余有效期不足")
@@ -185,11 +256,18 @@ class ProxyManager:
                 budget = min(5, deadline - time.monotonic())
                 if budget <= 0:
                     raise ValueError("解析预算已耗尽")
+                active_url = self.get_active_api_url()
+                if not active_url:
+                    raise ValueError("代理提取 API URL 未配置")
                 response = session.get(
-                    self.api_url, timeout=Timeout(total=budget, connect=min(2, budget), read=budget),
+                    active_url, timeout=Timeout(total=budget, connect=min(2, budget), read=budget),
                 )
                 response.raise_for_status()
-                proxy = self.decode(response.json(), now)
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = response.text
+                proxy = self.decode(payload, now)
         except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError):
             # 不记录完整异常，避免将含签名的提取 URL 写入日志。
             logger.warning("代理提取失败：网络、供应商状态或响应字段异常")

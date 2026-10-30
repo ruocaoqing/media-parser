@@ -3,6 +3,7 @@ import secrets
 import fcntl
 from datetime import timedelta
 from flask import Flask
+from flask_cors import CORS
 from src.api.parse import bp as api_bp
 from src.api.wx import bp as wx_bp
 from src.api.media_tools import bp as media_tools_bp
@@ -46,7 +47,9 @@ def create_app(config=None):
     app.config['DATABASE'] = os.getenv(
         'DATABASE_PATH', os.path.join(app.instance_path, 'media_parser.db')
     )
-    app.config['JULIANG_PROXY_API_URL'] = os.getenv('JULIANG_PROXY_API_URL', '').strip()
+    proxy_url = (os.getenv('DYNAMIC_PROXY_API_URL') or os.getenv('JULIANG_PROXY_API_URL') or '').strip()
+    app.config['DYNAMIC_PROXY_API_URL'] = proxy_url
+    app.config['JULIANG_PROXY_API_URL'] = proxy_url
     # 16MB 是多媒体工具上传的上限闸门（单图 12MB + multipart 余量），
     # 各接口仍保留自己的精确校验（头像 2MB、工具图片 12MB）。
     app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
@@ -74,10 +77,19 @@ def create_app(config=None):
     if not app.config.get('SECRET_KEY'):
         app.config['SECRET_KEY'] = _load_or_create_secret(database_dir or app.instance_path)
     init_database(app)
-    manager = ProxyManager(app.config["DATABASE"], app.config["JULIANG_PROXY_API_URL"])
+    manager = ProxyManager(app.config["DATABASE"], app.config["DYNAMIC_PROXY_API_URL"])
     app.extensions["proxy_manager"] = manager
     if not app.testing:
         manager.start()
+        from src.utils.cookie_registry import start_auto_inspector
+        start_auto_inspector()
+
+    # 跨域配置（仅对 /api/* 接口开放，默认允许所有来源，支持通过环境变量 CORS_ORIGINS 自定义）
+    cors_origins_raw = (os.getenv('CORS_ORIGINS') or '*').strip()
+    cors_origins = '*' if cors_origins_raw == '*' else [
+        origin.strip() for origin in cors_origins_raw.split(',') if origin.strip()
+    ]
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}})
 
     # 注册蓝图
     app.register_blueprint(api_bp, url_prefix='/api')
@@ -102,4 +114,4 @@ def create_app(config=None):
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8051)
+    app.run(host='0.0.0.0', port=int(os.getenv('WEB_PORT', '8051')))

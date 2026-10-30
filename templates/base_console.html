@@ -8,7 +8,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="32x32">
     <title>{% block title %}控制台{% endblock %} · Media Parser</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="{{ url_for('static', filename='vendor/tailwind.js') }}"></script>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -79,6 +79,9 @@
             </a>
             <a href="{{ url_for('admin.platforms') }}" class="nav-item flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors {{ 'bg-indigo-50/80 text-brand font-semibold shadow-2xs' if active_nav == 'platforms' else 'text-slate-600 hover:bg-slate-50 hover:text-slate-900' }}">
                 <span class="w-5 h-5 flex items-center justify-center shrink-0">{{ icon('globe', 'w-4 h-4') }}</span><span>支持平台</span>
+            </a>
+            <a href="{{ url_for('admin.cookies') }}" class="nav-item flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors {{ 'bg-indigo-50/80 text-brand font-semibold shadow-2xs' if active_nav == 'cookies' else 'text-slate-600 hover:bg-slate-50 hover:text-slate-900' }}">
+                <span class="w-5 h-5 flex items-center justify-center shrink-0">{{ icon('shield', 'w-4 h-4') }}</span><span>凭据巡检</span>
             </a>
 
             <div class="nav-group-title text-xs font-bold text-slate-400 px-3 pt-4 pb-1 uppercase tracking-wider">运维监控</div>
@@ -223,12 +226,12 @@
                 <input type="password" name="old_password" placeholder="请输入当前原密码" required autocomplete="current-password" class="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition">
             </div>
             <div class="space-y-1.5">
-                <label class="block text-xs font-semibold text-slate-700">新密码 <span class="text-slate-400 font-normal">(至少 8 位)</span></label>
-                <input type="password" name="new_password" minlength="8" placeholder="请输入新密码" required autocomplete="new-password" class="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition">
+                <label class="block text-xs font-semibold text-slate-700">新密码 <span class="text-slate-400 font-normal">(至少 6 位)</span></label>
+                <input type="password" name="new_password" minlength="6" placeholder="请输入新密码" required autocomplete="new-password" class="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition">
             </div>
             <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-slate-700">确认新密码</label>
-                <input type="password" name="confirm_password" minlength="8" placeholder="请再次输入新密码" required autocomplete="new-password" class="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition">
+                <input type="password" name="confirm_password" minlength="6" placeholder="请再次输入新密码" required autocomplete="new-password" class="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition">
             </div>
             <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button type="button" class="px-4 py-2 rounded-lg text-sm font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition shadow-xs" onclick="closeChangePasswordModal()">取消</button>
@@ -279,7 +282,20 @@ function initChartInteractions() {
                 succDot.style.display = 'block';
             }
 
-            const failCount = parseInt(failures) || 0;
+            const totalCalls = parseInt(calls) || 0;
+            const succCalls = parseInt(successes) || 0;
+            let rate = '100%';
+            if (totalCalls > 0) {
+                const r = (succCalls / totalCalls) * 100;
+                if (r === 100) {
+                    rate = '100%';
+                } else if (succCalls < totalCalls && r >= 99.95) {
+                    rate = '99.9%';
+                } else {
+                    rate = (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + '%';
+                }
+            }
+
             tooltip.innerHTML = `
                 <div class="tt-title">${date}</div>
                 <div class="tt-row">
@@ -290,11 +306,10 @@ function initChartInteractions() {
                     <span style="display:flex;align-items:center;gap:6px"><i class="tt-dot" style="background:#10b981"></i>成功解析</span>
                     <strong>${successes} 次</strong>
                 </div>
-                ${failCount > 0 ? `
                 <div class="tt-row">
-                    <span style="display:flex;align-items:center;gap:6px"><i class="tt-dot" style="background:#ef4444"></i>失败解析</span>
-                    <strong>${failCount} 次</strong>
-                </div>` : ''}
+                    <span style="display:flex;align-items:center;gap:6px"><i class="tt-dot" style="background:#0ea5e9"></i>成功率</span>
+                    <strong>${rate}</strong>
+                </div>
             `;
             tooltip.classList.add('active');
 
@@ -347,7 +362,10 @@ function dismissToast(el) {
 function initToasts() {
     const bubbles = document.querySelectorAll('.toast-bubble');
     bubbles.forEach(bubble => {
-        let timer = setTimeout(() => dismissToast(bubble), 3500);
+        const text = (bubble.querySelector('.toast-content') ? bubble.querySelector('.toast-content').textContent : '').trim();
+        // 欢迎语提示停留 6 秒，其他常规提示保持 3.5 秒
+        const duration = text.includes('欢迎使用 Media Parser') ? 6000 : 3500;
+        let timer = setTimeout(() => dismissToast(bubble), duration);
         bubble.addEventListener('mouseenter', () => clearTimeout(timer));
         bubble.addEventListener('mouseleave', () => {
             timer = setTimeout(() => dismissToast(bubble), 1500);
@@ -597,7 +615,7 @@ function initDonutInteractions() {
 
         const defaultVal = centerVal.textContent;
         const defaultLbl = centerLbl.textContent;
-        const defaultSub = centerSub ? centerSub.textContent : '';
+        const defaultSub = centerSub ? centerSub.innerHTML : '';
 
         const slices = wrapper.querySelectorAll('.pie-slice');
         const pills = wrapper.querySelectorAll('.pie-pill-item');
@@ -673,5 +691,6 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 <script src="{{ url_for('static', filename='js/table_manager.js') }}"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

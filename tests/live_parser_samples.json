@@ -193,6 +193,7 @@
     {
       "platform": "拼多多",
       "url": "https://mobile.yangkeduo.com/fyxmkief.html?feed_id=6960355310530660128&goods_id=978211601383",
+      "cookie_probe": {"platform_key": "pinduoduo", "capability": "多多视频访问"},
       "media_types": [
         "video"
       ],
@@ -297,6 +298,7 @@
     {
       "platform": "即梦AI",
       "url": "https://jimeng.jianying.com/s/rdloCrYi2wc/?t=8011",
+      "cookie_probe": {"platform_key": "jimeng", "capability": "分享接口访问"},
       "media_types": [
         "video"
       ],
@@ -415,6 +417,7 @@
     {
       "platform": "小红书",
       "url": "http://xhslink.com/o/5EY4JTCKXTr",
+      "cookie_probe": {"platform_key": "xiaohongshu", "capability": "风控兜底访问"},
       "pattern": "App 分享短链与 LivePhoto 实况图文",
       "media_types": [
         "images",
@@ -432,6 +435,7 @@
     {
       "platform": "视频号",
       "url": "https://weixin.qq.com/sph/AzGrUgqzFv",
+      "cookie_probe": {"platform_key": "yuanbao", "capability": "视频号媒体访问"},
       "media_types": [
         "video"
       ],
@@ -447,6 +451,7 @@
     {
       "platform": "微博",
       "url": "https://video.weibo.com/show?fid=1034:5336219874426938",
+      "cookie_probe": {"platform_key": "weibo", "capability": "视频访问；清晰度差异暂不自动判定"},
       "media_types": [
         "video"
       ],
@@ -477,6 +482,7 @@
     {
       "platform": "快手",
       "url": "https://v.m.chenzhongtech.com/fw/photo/3xbr5pi8hxi4e6s",
+      "cookie_probe": {"platform_key": "kuaishou", "capability": "风控兜底访问"},
       "media_types": [
         "video",
         "images",
@@ -492,6 +498,7 @@
     {
       "platform": "抖音",
       "url": "https://www.douyin.com/note/7616399587141737704",
+      "cookie_probe": {"platform_key": "douyin", "capability": "实况动轨数量增益"},
       "media_types": [
         "images",
         "live_media",
@@ -611,6 +618,7 @@
     {
       "platform": "知乎",
       "url": "https://www.zhihu.com/pin/2066168388699807826?native=1&page=video_pin&scene=share&utm_psn=2066168736831345973",
+      "cookie_probe": {"platform_key": "zhihu", "capability": "风控兜底访问"},
       "media_types": [
         "video"
       ],
@@ -701,6 +709,7 @@
     {
       "platform": "豆包",
       "url": "https://www.doubao.com/video-sharing?share_id=41356597786354690&source_type=mobile&video_id=v0d69cg10004d6978e2ljht0i4fdpp00&share_scene=video_viewer",
+      "cookie_probe": {"platform_key": "doubao", "capability": "视频访问；原画与水印差异暂不自动判定"},
       "media_types": [
         "video"
       ],
@@ -1545,8 +1554,8 @@
     },
     {
       "platform": "闲鱼",
-      "url": "https://e.tb.cn/h.8i8z2O3V2e1s7jh?tk=lK6ITYk0uYX",
-      "pattern": "闲鱼商品/分享短链 (e.tb.cn/h.8i8z2O3V2e1s7jh)",
+      "url": "https://m.tb.cn/h.jabJ2N9?tk=R4rQTJFs4aG",
+      "pattern": "闲鱼商品/分享短链 (m.tb.cn/h.jabJ2N9)",
       "media_types": [
         "images"
       ],
@@ -1555,7 +1564,7 @@
         "cover",
         "title"
       ],
-      "note": "2026-08 真实反馈验证: 闲鱼商品 (商品ID: 899895727372,"
+      "note": "2026-10 真实反馈验证: 闲鱼商品 (商品ID: 1086999547230)"
     },
     {
       "platform": "豆包",

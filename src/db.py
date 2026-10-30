@@ -49,6 +49,17 @@ CREATE TABLE IF NOT EXISTS request_logs (
     input_url TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cookie_probe_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    trigger_type TEXT NOT NULL DEFAULT 'manual',
+    detail TEXT,
+    duration_ms INTEGER,
+    probed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_probe_platform_time
+    ON cookie_probe_records(platform_key, probed_at DESC);
 CREATE TABLE IF NOT EXISTS rate_limit_buckets (
     subject TEXT NOT NULL,
     bucket_second INTEGER NOT NULL,
@@ -164,6 +175,7 @@ NEW_USER_COLUMNS = (
     ("openid", "TEXT"),
     ("nickname", "TEXT"),
     ("avatar", "TEXT"),
+    ("expires_at", "TEXT"),
     ("member_plan", "TEXT"),
     ("member_expires_at", "TEXT"),
     ("last_checkin_date", "TEXT"),
@@ -240,6 +252,7 @@ def init_db():
         "demo_enabled": "1",
         "registration_enabled": "1",
         "default_user_qps": "2",
+        "default_trial_days": "365",
         "default_initial_credits": "100",
         "wx_free_daily_quota": str(DEFAULT_FREE_DAILY_QUOTA),
         "wx_checkin_bonus": str(DEFAULT_CHECKIN_BONUS),
@@ -927,7 +940,7 @@ def _build_donut(rows):
 def get_top_users(days=7, limit=10):
     db = get_db()
     sql = (
-        "SELECT u.username, COUNT(l.id) as calls "
+        "SELECT u.id, u.username, COUNT(l.id) as calls "
         "FROM request_logs l "
         "JOIN users u ON u.id = l.user_id "
     )
@@ -942,6 +955,7 @@ def get_top_users(days=7, limit=10):
     max_calls = max((r["calls"] for r in rows), default=1)
     return [
         {
+            "id": r["id"],
             "username": r["username"],
             "calls": r["calls"],
             "pct": round((r["calls"] / max_calls) * 100, 1),

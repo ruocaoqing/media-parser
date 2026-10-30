@@ -457,3 +457,64 @@ input[type="number"]::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
 }
+
+/* ==========================================================================
+   Console design tokens & feedback motion (Cookie inspection page base)
+   ========================================================================== */
+:root {
+  --ink: #111111;
+  --ink-muted: #5f6368;
+  --ink-faint: #6b6b6b;
+  --line-card: #e8e8e8;
+  --line-row: #f2f2f2;
+  --line-control: #d1d5db;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 数字对齐：表格、统计与任何会刷新的数值 */
+.num { font-variant-numeric: tabular-nums; }
+
+/* 行反馈：1px 轮廓外扩，只动合成属性 */
+.row-hover {
+  transition: box-shadow 0.15s var(--ease-out);
+}
+.row-hover:hover {
+  box-shadow: 0 0 0 1px var(--line-control);
+  border-radius: 6px;
+}
+
+/* 加载骨架：保持行高的扁平灰条，不使用 shimmer 渐变 */
+@keyframes skeleton-pulse {
+  50% { opacity: 0.55; }
+}
+.skeleton {
+  background: #e5e7eb;
+  border-radius: 4px;
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-hover,
+  .skeleton {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* 跨页导航过渡：渐进增强，不支持的浏览器直接硬切 */
+@view-transition {
+  navigation: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @view-transition {
+    navigation: none;
+  }
+}
+
+/* 键盘可达性：Tab 聚焦统一轮廓 */
+:focus-visible {
+  outline: 2px solid var(--brand, #4f46e5);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

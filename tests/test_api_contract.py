@@ -20,7 +20,7 @@ class ApiContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Media Parser", response.get_data(as_text=True))
         self.assertIn("多平台媒体解析", response.get_data(as_text=True))
-        self.assertIn("githubStars", response.get_data(as_text=True))
+        self.assertIn("navGithubStars", response.get_data(as_text=True))
         self.assertIn("api.github.com/repos/ucmao/media-parser", response.get_data(as_text=True))
         self.assertIn("开源自部署", response.get_data(as_text=True))
         self.assertNotIn("套餐资费", response.get_data(as_text=True))

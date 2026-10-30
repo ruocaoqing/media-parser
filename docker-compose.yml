@@ -1,13 +1,14 @@
 
 services:
   web:
+    image: media-parser:latest
     build: .
     container_name: media-parser-backend
     restart: always
     ports:
-      - "8051:8051"
+      - "${WEB_PORT:-8051}:${WEB_PORT:-8051}"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8051/api/health')"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('WEB_PORT','8051')+'/api/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -20,6 +21,8 @@ services:
     # 基础运行环境（开箱即用，无需配置 Cookie 即可直接启动）
     environment:
       - TZ=Asia/Shanghai
+      # 后端监听端口（默认 8051,改一处即同时作用于映射与健康检查）
+      - WEB_PORT=${WEB_PORT:-8051}
       - SECRET_KEY=${SECRET_KEY:-}
       - DATABASE_PATH=/app/data/media_parser.db
       - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
@@ -32,7 +35,8 @@ services:
       # 插件扫码登录的小程序码版本：默认 trial（小程序还没发正式版，release 的码扫不开）。
       # 发布正式版后改回 release（或直接删掉这行用代码默认值）。
       - WX_QR_ENV_VERSION=${WX_QR_ENV_VERSION:-trial}
-      # Cookie 触发的动态代理提取地址（上游 #22 代理访问机制），配置说明见 docs/proxy-retry.md
+      # Cookie 触发的动态代理提取地址；兼容旧的 JULIANG_PROXY_API_URL。
+      - DYNAMIC_PROXY_API_URL=${DYNAMIC_PROXY_API_URL:-${JULIANG_PROXY_API_URL:-}}
       - JULIANG_PROXY_API_URL=${JULIANG_PROXY_API_URL:-}
       # 可选平台凭据（若在本地 .env 中配置将自动透传进容器）：
       - XHS_COOKIE=${XHS_COOKIE:-}

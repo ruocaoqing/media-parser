@@ -193,11 +193,51 @@ class JianyingParser(BaseParser):
             response.raise_for_status()
             templates = ((response.json().get("data") or {}).get("templates") or [])
             if templates and isinstance(templates[0], dict):
-                return templates[0]
+                template = templates[0]
+                preview_url = template.get("video_url")
+                if preview_url:
+                    clean_url = self._resolve_unwatermarked_url(preview_url)
+                    if clean_url:
+                        template["video_url"] = clean_url
+                return template
             logger.warning("Jianying API returned no template for %s", self.target_id)
         except Exception as exc:
             logger.warning("Failed to fetch Jianying template: %s", exc)
         return {}
+
+    def _resolve_unwatermarked_url(self, preview_url: str) -> str:
+        """从剪映带水印预览流中提取 vid，并解析为 1080p/原画无水印播放直链。"""
+        if not preview_url or not isinstance(preview_url, str):
+            return preview_url
+        try:
+            # 1. Range 请求读取前 128KB 提取 MP4 头部 vid 元数据
+            resp = self.session.get(
+                preview_url,
+                headers={"Range": "bytes=0-131072", "User-Agent": self.USER_AGENT},
+                timeout=5,
+            )
+            match = re.search(rb"vid:(v[0-9a-zA-Z]+)", resp.content)
+            if not match:
+                return preview_url
+            vid = match.group(1).decode("utf-8")
+
+            # 2. 构造无水印播放端点并解析 302 重定向
+            ies_url = (
+                f"https://www.iesdouyin.com/aweme/v1/play/"
+                f"?video_id={vid}&ratio=default&line=0&is_play_url=1&watermark=0&source=PackSourceEnum_PUBLISH"
+            )
+            head_resp = self.session.head(
+                ies_url,
+                headers={"User-Agent": self.USER_AGENT},
+                allow_redirects=False,
+                timeout=5,
+            )
+            if head_resp.status_code in (301, 302) and head_resp.headers.get("Location"):
+                return head_resp.headers["Location"]
+            return ies_url
+        except Exception as exc:
+            logger.warning("Failed to extract unwatermarked jianying video: %s", exc)
+            return preview_url
 
     def get_real_video_url(self):
         return self.template.get("video_url")

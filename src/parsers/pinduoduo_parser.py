@@ -1,5 +1,4 @@
 import json
-import os
 import random
 import re
 import string
@@ -102,7 +101,7 @@ class PinduoduoParser(BaseParser):
         """调用多多视频 API 获取视频播放地址、封面、标题与作者。"""
         signer = AntiSigner()
         anti_content = signer.get_anti_content()
-        cookie = os.getenv("PINDUODUO_COOKIE", "").strip()
+        cookie = get_platform_cookie("pinduoduo")
 
         list_id = "".join(random.choices(string.ascii_letters + string.digits, k=10))
         payload = {

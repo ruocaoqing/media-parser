@@ -1,0 +1,446 @@
+{% extends 'base_console.html' %}
+{% block title %}凭据巡检 · 管理员后台{% endblock %}
+{% block page_title %}凭据巡检{% endblock %}
+{% block console_content %}
+<main class="max-w-6xl mx-auto space-y-6">
+
+    <!-- 标题行与主操作 -->
+    <div class="flex items-start justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Cookie 凭据巡检</h1>
+        </div>
+        <div class="flex items-center gap-3 shrink-0 pt-1">
+            <button type="button" id="btn-check-all" onclick="checkAll(this)"
+                class="inline-flex items-center gap-2 px-4 h-9 rounded-lg text-sm font-semibold text-white bg-slate-900 hover:bg-slate-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                {{ icon('shield', 'w-4 h-4') }}
+                <span>全部重新巡检</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 状态总览：一个容器分格，数字即界面 -->
+    {% set needs_attention = overview.summary.stale + overview.summary.incomplete + overview.summary.probe_failed %}
+    <div id="cookie-summary" class="grid grid-cols-2 sm:grid-cols-4 bg-white rounded-xl border border-slate-200/80 divide-x divide-y sm:divide-y-0 divide-slate-200/80 overflow-hidden">
+        <div class="px-5 py-4">
+            <div class="text-xs text-slate-500">有效</div>
+            <div class="text-2xl text-emerald-700 num mt-0.5">{{ overview.summary.healthy }}</div>
+        </div>
+        <div class="px-5 py-4">
+            <div class="text-xs text-slate-500">需处理</div>
+            <div class="text-2xl num mt-0.5 {{ 'text-rose-700' if needs_attention else 'text-slate-900' }}">{{ needs_attention }}</div>
+        </div>
+        <div class="px-5 py-4">
+            <div class="text-xs text-slate-500">待验证</div>
+            <div class="text-2xl num mt-0.5 text-amber-700">{{ overview.summary.unverified }}</div>
+        </div>
+        <div class="px-5 py-4">
+            <div class="text-xs text-slate-500">未配置</div>
+            <div class="text-2xl num mt-0.5 text-slate-500">{{ overview.summary.not_configured }}</div>
+        </div>
+    </div>
+
+    <!-- 凭据明细矩阵 -->
+    <section class="bg-white rounded-xl border border-slate-200/80 p-5 sm:p-6 shadow-xs">
+        <div class="border-b border-slate-100 pb-3 mb-4">
+            <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+                {{ icon('key', 'w-4 h-4 text-brand') }}
+                凭据明细
+            </h2>
+        </div>
+
+        <div class="table-wrap overflow-x-auto rounded-xl border border-slate-200 custom-scroll">
+            <table class="w-full text-left text-xs border-collapse">
+                <thead class="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
+                    <tr>
+                        <th class="px-3.5 py-3 whitespace-nowrap">平台</th>
+                        <th class="px-3 py-3 whitespace-nowrap w-24">
+                            <span class="inline-flex items-center gap-1">
+                                依赖程度
+                                <span class="cursor-help text-slate-400 hover:text-slate-600" title="【必需】：不配凭据功能完全不可用&#10;【增强】：不配可解析常规画质，配了可解锁原画/实况&#10;【兜底】：仅在频繁抓包触发平台安全拦截时启用">
+                                    {{ icon('help-circle', 'w-3.5 h-3.5') }}
+                                </span>
+                            </span>
+                        </th>
+                        <th class="px-3 py-3 whitespace-nowrap w-24">
+                            <span class="inline-flex items-center gap-1">
+                                凭据来源
+                                <span class="cursor-help text-slate-400 hover:text-slate-600" title="【后台配置】：通过网页录入保存（优先级最高）&#10;【环境变量】：读取服务器 .env 文件的配置&#10;【—】：未配置任何凭据">
+                                    {{ icon('help-circle', 'w-3.5 h-3.5') }}
+                                </span>
+                            </span>
+                        </th>
+                        <th class="px-3.5 py-3 min-w-[200px]">支持能力</th>
+                        <th class="px-3 py-3 whitespace-nowrap w-28">状态</th>
+                        <th class="px-3 py-3 whitespace-nowrap w-36">最近验证</th>
+                        <th class="th-action px-3.5 py-3 w-28 text-right">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="cookie-rows" class="divide-y divide-slate-100">
+                    {% for item in overview.entries %}
+                    <tr id="row-{{ item.platform_key }}" class="align-middle hover:bg-slate-50/70 transition" data-platform="{{ item.platform_key }}">
+                        <td class="px-3.5 py-3.5 whitespace-nowrap">
+                            <div class="font-bold text-slate-900 text-xs">{{ item.platform_name }}</div>
+                        </td>
+                        <td class="px-3 py-3.5 whitespace-nowrap">
+                            {% if item.severity == 'critical' %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200">必需</span>
+                            {% elif item.severity == 'enhanced' %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">增强</span>
+                            {% else %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200">兜底</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3.5 whitespace-nowrap">
+                            {% if item.source == 'database' %}
+                                <span class="text-xs text-slate-700 font-medium">后台配置</span>
+                            {% elif item.source == 'env' %}
+                                <span class="text-xs text-slate-500">环境变量</span>
+                            {% else %}
+                                <span class="text-xs text-slate-300">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3.5 py-3.5">
+                            <div class="flex flex-wrap gap-x-2.5 gap-y-1 text-xs">
+                                {% for cap in item.capabilities %}
+                                <span class="inline-flex items-center gap-0.5 {{ 'text-slate-700 font-medium' if cap.active else 'text-slate-300 line-through' }}">
+                                    {{ cap.name }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                        </td>
+                        <td class="px-3 py-3.5 whitespace-nowrap">
+                            {% set pill = {
+                                'unverified': 'bg-[#fffbeb] text-[#92400e]',
+                                'healthy': 'bg-[#dcfae5] text-[#04250e]',
+                                'stale': 'bg-[#ffedea] text-[#831c1e]',
+                                'incomplete': 'bg-[#fffbeb] text-[#92400e]',
+                                'not_configured': 'bg-slate-100 text-slate-500',
+                                'probe_failed': 'bg-[#ffedea] text-[#831c1e]',
+                            }[item.status] %}
+                            <span role="status" aria-label="{{ item.platform_name }}凭据{{ item.status_label }}"
+                                class="status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{ pill }}">{{ item.status_label }}</span>
+                            {% set probe_detail = item.last_probe.detail if item.last_probe else none %}
+                            <div class="probe-meta text-[11px] text-slate-500 mt-1 max-w-56 whitespace-normal">{{ (probe_detail.note or probe_detail.error) if probe_detail is mapping else '' }}</div>
+                            {% if item.status == 'incomplete' and item.field_check.missing %}
+                                <div class="text-[11px] text-amber-700 mt-1">缺: {{ item.field_check.missing | join('、') }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-3.5 whitespace-nowrap text-xs text-slate-500 num">
+                            {% if item.last_probe %}
+                                {{ format_log_time(item.last_probe.probed_at)[:16] }}
+                            {% else %}
+                                <span class="text-slate-300">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3.5 py-3.5 text-right whitespace-nowrap space-x-1">
+                            <button type="button" onclick="probeCheck('{{ item.platform_key }}', this)"
+                                class="text-xs font-medium text-slate-700 hover:text-brand transition-colors px-2.5 py-1 rounded-md hover:bg-slate-100 disabled:opacity-50">验证</button>
+                            <button type="button" onclick="openConfigModal('{{ item.platform_key }}')"
+                                class="text-xs font-semibold text-brand hover:text-brand-hover transition-colors px-2.5 py-1 rounded-md hover:bg-brand/10">配置</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-4 pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-400">
+            <div>
+                💡 点击「验证」可即时检测 Cookie 存活状态；点击「配置」可快捷更新凭据。
+            </div>
+            <div>
+                也可前往 <a class="text-brand hover:underline font-medium" href="{{ url_for('admin.settings') }}#tab=cookies">系统设置 → 平台凭据</a> 集中管理
+            </div>
+        </div>
+    </section>
+
+    <!-- 凭据与测试样例 配置模态框 (Modal) -->
+    <div id="config-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs hidden transition-opacity">
+        <div class="bg-white rounded-2xl shadow-xl border border-slate-200/80 w-full max-w-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <!-- 头部 -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                <div class="flex items-center gap-2">
+                    <span class="text-brand flex items-center justify-center">{{ icon('key', 'w-4 h-4') }}</span>
+                    <h3 id="modal-title" class="text-sm font-bold text-slate-900">配置平台凭据</h3>
+                </div>
+                <button type="button" onclick="closeConfigModal()" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors">
+                    {{ icon('x', 'w-4 h-4') }}
+                </button>
+            </div>
+
+            <!-- 主体表单 -->
+            <div class="p-6 space-y-5">
+                <input type="hidden" id="modal-platform-key">
+
+                <!-- Cookie 凭据输入 -->
+                <div class="space-y-1.5">
+                    <label for="modal-cred-input" class="block text-xs font-semibold text-slate-700">Cookie 凭据</label>
+                    <textarea id="modal-cred-input" rows="4" spellcheck="false"
+                        placeholder="粘贴完整的平台 Cookie（留空保存即清空并回落到环境变量）"
+                        class="w-full px-3.5 py-2 font-mono text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition bg-slate-50/50 custom-scroll"></textarea>
+                    <p id="modal-cred-hint" class="text-xs text-slate-400"></p>
+                </div>
+
+                <!-- 测试样例链接 (原金丝雀) -->
+                <div class="space-y-1.5">
+                    <label for="modal-canary-input" class="block text-xs font-semibold text-slate-700">测试样例链接（用于探针验证）</label>
+                    <input type="text" id="modal-canary-input"
+                        placeholder="粘贴用于测试的平台分享链接"
+                        class="w-full px-3.5 py-2 font-mono text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 transition bg-slate-50/50">
+                    <p id="modal-canary-capability" class="text-[11px] text-slate-400 break-all"></p>
+                    <p id="modal-canary-error" class="hidden text-xs text-rose-600"></p>
+                </div>
+
+                <!-- 结果消息反馈 -->
+                <div id="modal-msg" class="hidden p-3 rounded-lg text-xs"></div>
+            </div>
+
+            <!-- 底部操作按钮 -->
+            <div class="flex items-center justify-end gap-3 px-6 py-3.5 border-t border-slate-100 bg-slate-50/50">
+                <button type="button" onclick="closeConfigModal()"
+                    class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors">取消</button>
+                <button type="button" id="modal-save-btn" onclick="saveModalConfig(this)"
+                    class="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-60">
+                    <span>保存配置</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script id="cookie-platform-data" type="application/json">{{ overview.entries | tojson }}</script>
+<script>
+    const CSRF = {{ csrf_token() | tojson }};
+    const PLATFORM_DATA = JSON.parse(document.getElementById('cookie-platform-data').textContent);
+    const PLATFORM_MAP = {};
+    PLATFORM_DATA.forEach(p => { PLATFORM_MAP[p.platform_key] = p; });
+
+    const PILL_CLASS = {
+        unverified: 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#fffbeb] text-[#92400e]',
+        healthy: 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#dcfae5] text-[#04250e]',
+        stale: 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#ffedea] text-[#831c1e]',
+        incomplete: 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#fffbeb] text-[#92400e]',
+        not_configured: 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500',
+        probe_failed: 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#ffedea] text-[#831c1e]',
+    };
+    const STATUS_TEXT = { unverified: '待验证', healthy: '有效', stale: '疑似失效', incomplete: '字段缺失', not_configured: '未配置', probe_failed: '探针失败' };
+
+    async function refreshOverview() {
+        const response = await fetch('{{ url_for("admin.cookies") }}', { cache: 'no-store' });
+        if (!response.ok) throw new Error('巡检结果刷新失败');
+        const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+        const data = page.getElementById('cookie-platform-data');
+        const summary = page.getElementById('cookie-summary');
+        const rows = page.getElementById('cookie-rows');
+        if (!data || !summary || !rows) throw new Error('巡检结果刷新失败');
+        const entries = JSON.parse(data.textContent);
+        document.getElementById('cookie-summary').replaceWith(summary);
+        document.getElementById('cookie-rows').replaceWith(rows);
+        entries.forEach(item => { PLATFORM_MAP[item.platform_key] = item; });
+    }
+
+    function setPill(platformKey, status, note) {
+        const row = document.getElementById('row-' + platformKey);
+        if (!row) return;
+        const pill = row.querySelector('.status-pill');
+        if (pill) {
+            pill.className = PILL_CLASS[status] || PILL_CLASS.not_configured;
+            pill.textContent = STATUS_TEXT[status] || status;
+        }
+        const meta = row.querySelector('.probe-meta');
+        if (meta) {
+            meta.textContent = note || '';
+            meta.title = note || '';
+        }
+    }
+
+    function formatNow() {
+        const d = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function setRowProbing(platformKey, text) {
+        const row = document.getElementById('row-' + platformKey);
+        if (!row) return;
+        const pill = row.querySelector('.status-pill');
+        if (pill) {
+            pill.className = 'status-pill inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-400';
+            pill.textContent = text;
+        }
+    }
+
+    async function probeCheck(platformKey, btn) {
+        if (btn) btn.disabled = true;
+        setRowProbing(platformKey, '探针中…');
+        const tbody = document.querySelector('tbody');
+        if (tbody) tbody.setAttribute('aria-busy', 'true');
+        try {
+            const body = new FormData();
+            body.append('platform', platformKey);
+            body.append('csrf_token', CSRF);
+            const resp = await fetch('{{ url_for("admin.cookies_probe") }}', { method: 'POST', body });
+            if (resp.status === 429) {
+                setRowProbing(platformKey, '防抖跳过');
+                return;
+            }
+            const payload = await resp.json();
+            if (payload.succ) {
+                const d = payload.data || {};
+                const note = (d.detail && (d.detail.note || d.detail.error || d.detail.signal)) || '';
+                setPill(platformKey, d.status, note);
+                // 实时刷新当前行「最近验证」时间列
+                const timeCell = document.querySelector('#row-' + platformKey + ' td:nth-child(6)');
+                if (timeCell) timeCell.textContent = formatNow();
+            } else {
+                setPill(platformKey, 'probe_failed', payload.message);
+            }
+        } catch (e) {
+            setPill(platformKey, 'probe_failed', '探针请求失败，请稍后重试');
+        } finally {
+            if (btn) btn.disabled = false;
+            const tbody = document.querySelector('tbody');
+            if (tbody) tbody.removeAttribute('aria-busy');
+            try { await refreshOverview(); }
+            catch (e) { setPill(platformKey, PLATFORM_MAP[platformKey].status, '结果刷新失败，请刷新页面查看最新状态'); }
+        }
+    }
+
+    async function checkAll(btn) {
+        btn.disabled = true;
+        const label = btn.querySelector('span');
+        const tbody = document.querySelector('tbody');
+        if (tbody) tbody.setAttribute('aria-busy', 'true');
+        if (label) label.textContent = '巡检中…';
+        const platforms = Array.from(document.querySelectorAll('tr[data-platform]')).map(r => r.dataset.platform);
+        for (const key of platforms) {
+            const sourceCell = document.querySelector('#row-' + key + ' td:nth-child(3)');
+            if (sourceCell && sourceCell.textContent.trim() === '—') continue;
+            setRowProbing(key, '探针中…');
+            try {
+                const body = new FormData();
+                body.append('platform', key);
+                body.append('csrf_token', CSRF);
+                const resp = await fetch('{{ url_for("admin.cookies_probe") }}', { method: 'POST', body });
+                if (resp.status === 429) {
+                    setPill(key, PLATFORM_MAP[key].status, '距上次验证不足 5 分钟，已跳过');
+                    continue;
+                }
+                const payload = await resp.json();
+                const status = payload.succ ? (payload.data.status || 'probe_failed') : 'probe_failed';
+                const detail = (payload.data && payload.data.detail) || {};
+                setPill(key, status, detail.note || detail.error || detail.signal || payload.message);
+                if (payload.succ) {
+                    const timeCell = document.querySelector('#row-' + key + ' td:nth-child(6)');
+                    if (timeCell) timeCell.textContent = formatNow();
+                }
+            } catch (e) { setPill(key, 'probe_failed'); }
+        }
+        btn.disabled = false;
+        if (label) label.textContent = '全部重新巡检';
+        if (tbody) tbody.removeAttribute('aria-busy');
+        try { await refreshOverview(); }
+        catch (e) { if (label) label.textContent = '结果刷新失败，请刷新页面'; }
+    }
+
+    // --- 模态框逻辑 ---
+    function openConfigModal(platformKey) {
+        const item = PLATFORM_MAP[platformKey];
+        if (!item) return;
+
+        document.getElementById('modal-platform-key').value = platformKey;
+        document.getElementById('modal-title').textContent = `配置凭据与测试样例 - ${item.platform_name}`;
+        const envKey = item.env_keys && item.env_keys[0];
+        document.getElementById('modal-cred-input').placeholder = envKey
+            ? `粘贴完整的平台 Cookie（留空保存即清空并读取环境变量 ${envKey}）`
+            : '粘贴完整的平台 Cookie（留空保存即清空）';
+        document.getElementById('modal-cred-input').value = item.cookie_value || '';
+        document.getElementById('modal-cred-hint').textContent = item.config_hint || '';
+        document.getElementById('modal-canary-input').value = item.canary_url || '';
+        document.getElementById('modal-canary-input').placeholder = item.default_canary_url
+            ? '粘贴用于测试的平台分享链接（留空使用样本库默认链接）'
+            : '粘贴用于测试的平台分享链接（暂无默认样例，请填写链接）';
+        document.getElementById('modal-canary-capability').textContent = item.default_canary_url ? `默认测试链接：${item.default_canary_url}` : '';
+        document.getElementById('modal-canary-error').classList.add('hidden');
+
+        const msgBox = document.getElementById('modal-msg');
+        msgBox.className = 'hidden';
+        msgBox.textContent = '';
+
+        const modal = document.getElementById('config-modal');
+        modal.classList.remove('hidden');
+    }
+
+    function closeConfigModal() {
+        document.getElementById('config-modal').classList.add('hidden');
+    }
+
+    async function saveModalConfig(btn) {
+        const platformKey = document.getElementById('modal-platform-key').value;
+        const credValue = document.getElementById('modal-cred-input').value.trim();
+        const canaryUrl = document.getElementById('modal-canary-input').value.trim();
+        const msgBox = document.getElementById('modal-msg');
+        const canaryError = document.getElementById('modal-canary-error');
+
+        canaryError.classList.add('hidden');
+        msgBox.classList.add('hidden');
+        btn.disabled = true;
+
+        try {
+            // 同时保存凭据与测试链接，链接校验失败时不修改配置
+            const credBody = new FormData();
+            credBody.append('platform', platformKey);
+            credBody.append('value', credValue);
+            credBody.append('canary_url', canaryUrl);
+            credBody.append('csrf_token', CSRF);
+            const credResp = await fetch('{{ url_for("admin.cookies_credential") }}', { method: 'POST', body: credBody });
+            const credPayload = await credResp.json();
+
+            if (!credPayload.succ) {
+                if (credPayload.field === 'canary_url') {
+                    canaryError.textContent = credPayload.message;
+                    canaryError.classList.remove('hidden');
+                    return;
+                }
+                msgBox.className = 'p-3 rounded-lg text-xs bg-rose-50 text-rose-700 border border-rose-200';
+                msgBox.textContent = '凭据保存失败: ' + (credPayload.message || '未知错误');
+                msgBox.classList.remove('hidden');
+                btn.disabled = false;
+                return;
+            }
+
+            try {
+                await refreshOverview();
+            } catch (e) {
+                msgBox.className = 'p-3 rounded-lg text-xs bg-amber-50 text-amber-700';
+                msgBox.textContent = '配置已保存，页面刷新失败，请刷新页面查看最新状态';
+                return;
+            }
+
+            closeConfigModal();
+        } catch (e) {
+            msgBox.className = 'p-3 rounded-lg text-xs bg-rose-50 text-rose-700 border border-rose-200';
+            msgBox.textContent = '网络请求异常，保存失败';
+            msgBox.classList.remove('hidden');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // 支持 ESC 键关闭模态框
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeConfigModal();
+        }
+    });
+
+    // 点击背景遮罩关闭模态框
+    document.getElementById('config-modal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeConfigModal();
+        }
+    });
+</script>
+{% endblock %}

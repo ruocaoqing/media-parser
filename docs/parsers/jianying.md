@@ -7,13 +7,14 @@
 ## 1. 平台特征与支持能力
 
 * **平台标识**：`剪映`
-* **支持媒体类型**：高清模板视频 (MP4) / 协作审阅视频 / 高清封面图 / 标题 / 创作者信息
+* **支持媒体类型**：高清无水印模板视频 (MP4) / CapCut 协作审阅视频 / 高清封面图 / 独立背景音乐 (MP3) / 标题 / 创作者信息
 * **支持域名**：
   * `lv.ulikecam.com`（剪映移动端模板分享）
   * `www.capcut.cn` / `capcut.cn`（CapCut 网页版/桌面协作分享）
 * **常见链接形态**：
   * **剪映移动端模板长链**：`https://lv.ulikecam.com/activity/lv/sharevideo?template_id=7631885529415568665`
   * **CapCut 协作审阅分享**：`https://www.capcut.cn/share/7678345113499604249?t=1`
+* **去水印特性**：✅ 已支持原生 1080p/原画无水印直链提取（彻底去除模板预览内置的“剪映/剪映号”Logo 水印）。
 * **Cookie 依赖**：🟢 免配置（开箱即用）。
 
 ---
@@ -21,13 +22,22 @@
 ## 2. 核心逆向流程
 
 ### 分支 A：剪映移动端模板分享 (`lv.ulikecam.com`)
+
 1. **提取 Template ID**：从 URL Query 参数提取 `template_id` 与 `item_type`。
 2. **计算接口签名 (Sign)**：
    $$\text{sign} = \text{MD5}("9e2c|mplates|0||" + \text{timestamp} + "||11ac")$$
 3. **请求模板详情**：
    - 接口：`POST https://lv-api.ulikecam.com/lv/v1/web/replicate/multi_get_templates`
    - 入参：`{"sdk_version": "100.0.0", "id": [template_id], "scene": "share", "item_type": item_type}`
-4. **提取媒体直链**：从 `data.templates[0]` 中直接提取 `video_url`、`cover_url` 与作者信息。
+4. **提取媒体直链与无水印反解**：
+   - **痛点分析**：剪映模板接口返回的 `template.video_url` 为 Web H5 播放的带水印预览视频（左下角固定硬编码压制了剪映 Logo 与剪映号）。
+   - **MP4 元数据解析 (Range 提取)**：字节跳动云端转码流水线会在生成的 MP4 容器 `udta/data` 元数据中注入原始素材唯一识别码 `vid:v0...`。解析器通过 `Range: bytes=0-131072` 仅拉取前 128KB 头部字节，通过正则 `vid:(v[0-9a-zA-Z]+)` 高速提取该 ID（单次耗时约 0.1s，无需完整下载视频）。
+   - **官方无水印端点重定向**：将 `vid` 送入字节跳动官方原画无水印播放接口：
+     ```text
+     https://www.iesdouyin.com/aweme/v1/play/?video_id={vid}&ratio=default&line=0&is_play_url=1&watermark=0&source=PackSourceEnum_PUBLISH
+     ```
+     跟随 302 重定向获取未压制水印的高清/原画视频 CDN 直链（`douyinvod.com`）。
+   - **平滑降级 (Fallback)**：若 Range 请求未探测到 `vid` 或网络抖动，自动降级沿用 `template.video_url`，100% 保障业务可用性。
 
 ---
 

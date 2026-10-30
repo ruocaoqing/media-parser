@@ -77,6 +77,52 @@ class ManagementTest(unittest.TestCase):
         parser.get_subtitles.return_value = None
         return parser
 
+    def test_six_character_password_setup_register_and_admin_change(self):
+        for route, username, role in (
+            ("/auth/setup", "admin", "admin"),
+            ("/auth/register", "six_user", "user"),
+        ):
+            with self.subTest(route=route):
+                response = self.client.post(route, data={
+                    "csrf_token": self.csrf(), "username": username,
+                    "password": "12345", "confirm_password": "12345",
+                })
+                self.assertIn("密码至少 6 位", response.get_data(as_text=True))
+                with self.app.app_context():
+                    self.assertIsNone(get_db().execute(
+                        "SELECT id FROM users WHERE username=?", (username,),
+                    ).fetchone())
+                response = self.client.post(route, data={
+                    "csrf_token": self.csrf(), "username": username,
+                    "password": "123456", "confirm_password": "123456",
+                })
+                self.assertEqual(response.status_code, 302)
+                with self.app.app_context():
+                    self.assertEqual(get_db().execute(
+                        "SELECT role FROM users WHERE username=?", (username,),
+                    ).fetchone()["role"], role)
+                self.client.post("/auth/logout", data={"csrf_token": self.csrf()})
+                response = self.client.post("/auth/login", data={
+                    "csrf_token": self.csrf(), "username": username, "password": "123456",
+                })
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(response.location.endswith("/admin" if role == "admin" else "/console"))
+
+        self.client.post("/auth/login", data={
+            "csrf_token": self.csrf(), "username": "admin", "password": "123456",
+        })
+        for password, message in (("12345", "新密码至少需要 6 位"), ("654321", "密码修改成功")):
+            response = self.client.post("/auth/change-password", data={
+                "csrf_token": self.csrf(), "old_password": "123456",
+                "new_password": password, "confirm_password": password,
+            }, follow_redirects=True)
+            self.assertIn(message, response.get_data(as_text=True))
+        self.client.post("/auth/logout", data={"csrf_token": self.csrf()})
+        response = self.client.post("/auth/login", data={
+            "csrf_token": self.csrf(), "username": "admin", "password": "654321",
+        })
+        self.assertTrue(response.location.endswith("/admin"))
+
     def test_first_admin_setup_and_login(self):
         response = self.client.post(
             "/auth/setup",
@@ -322,7 +368,8 @@ class ManagementTest(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("账号已开通并赠送 100 积分", response.get_data(as_text=True))
+        self.assertIn("试用开通", response.get_data(as_text=True))
+        self.assertIn("100 点额度已发放", response.get_data(as_text=True))
         with self.app.app_context():
             user = get_db().execute("SELECT * FROM users WHERE username='new_credit_user'").fetchone()
             self.assertEqual(user["credits"], 100)
@@ -340,7 +387,7 @@ class ManagementTest(unittest.TestCase):
             follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("无限解析额度", response.get_data(as_text=True))
+        self.assertIn("无限额度已启用", response.get_data(as_text=True))
         with self.app.app_context():
             user = get_db().execute("SELECT * FROM users WHERE username='perm_user'").fetchone()
             self.assertEqual(user["credits"], -1)
@@ -520,8 +567,8 @@ class ManagementTest(unittest.TestCase):
             data={
                 "csrf_token": self.csrf(),
                 "old_password": "wrongoldpassword",
-                "new_password": "newpassword123",
-                "confirm_password": "newpassword123",
+                "new_password": "new123",
+                "confirm_password": "new123",
             },
             follow_redirects=True,
         )
@@ -538,7 +585,7 @@ class ManagementTest(unittest.TestCase):
             },
             follow_redirects=True,
         )
-        self.assertIn("新密码至少需要 8 位", res.get_data(as_text=True))
+        self.assertIn("新密码至少需要 6 位", res.get_data(as_text=True))
 
         # Fail change with mismatched confirmation
         res = self.client.post(
@@ -546,7 +593,7 @@ class ManagementTest(unittest.TestCase):
             data={
                 "csrf_token": self.csrf(),
                 "old_password": "oldpassword123",
-                "new_password": "newpassword123",
+                "new_password": "new123",
                 "confirm_password": "different123",
             },
             follow_redirects=True,
@@ -559,8 +606,8 @@ class ManagementTest(unittest.TestCase):
             data={
                 "csrf_token": self.csrf(),
                 "old_password": "oldpassword123",
-                "new_password": "newpassword123",
-                "confirm_password": "newpassword123",
+                "new_password": "new123",
+                "confirm_password": "new123",
             },
             follow_redirects=True,
         )
@@ -577,7 +624,7 @@ class ManagementTest(unittest.TestCase):
 
         succ_login = self.client.post(
             "/auth/login",
-            data={"csrf_token": self.csrf(), "username": "user1", "password": "newpassword123"},
+            data={"csrf_token": self.csrf(), "username": "user1", "password": "new123"},
         )
         self.assertEqual(succ_login.status_code, 302)
 
@@ -609,12 +656,12 @@ class ManagementTest(unittest.TestCase):
             data={"csrf_token": self.csrf(), "new_password": "short"},
             follow_redirects=True,
         )
-        self.assertIn("重置密码至少需要 8 位", res.get_data(as_text=True))
+        self.assertIn("重置密码至少需要 6 位", res.get_data(as_text=True))
 
         # Admin resets customer password successfully
         res = self.client.post(
             f"/admin/users/{customer_id}/reset-password",
-            data={"csrf_token": self.csrf(), "new_password": "resetpassword888"},
+            data={"csrf_token": self.csrf(), "new_password": "123456"},
             follow_redirects=True,
         )
         self.assertIn("已成功重置客户「customer1」的密码", res.get_data(as_text=True))
@@ -623,7 +670,7 @@ class ManagementTest(unittest.TestCase):
         self.client.post("/auth/logout", data={"csrf_token": self.csrf()})
         succ_login = self.client.post(
             "/auth/login",
-            data={"csrf_token": self.csrf(), "username": "customer1", "password": "resetpassword888"},
+            data={"csrf_token": self.csrf(), "username": "customer1", "password": "123456"},
         )
         self.assertEqual(succ_login.status_code, 302)
 

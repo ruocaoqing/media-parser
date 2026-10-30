@@ -241,7 +241,7 @@ class RetryIntegrationTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.app = create_app({'TESTING': True, 'API_ONLY': True, 'SECRET_KEY': 'test',
                                'DATABASE': os.path.join(self.temp.name, 'test.db'),
-                               'JULIANG_PROXY_API_URL': 'http://provider.invalid'})
+                               'DYNAMIC_PROXY_API_URL': 'http://provider.invalid'})
         self.manager = self.app.extensions['proxy_manager']
         self.client = self.app.test_client()
         self.url = 'https://v.kuaishou.com/test'
@@ -366,7 +366,8 @@ class RetryIntegrationTest(unittest.TestCase):
 
     def test_credit_and_request_log_happen_once(self):
         with self.app.test_request_context('/api/v1/parse'):
-            with patch('src.api.parse.reserve_user_credit', return_value=True) as reserve, \
+            with patch('src.api.parse.consume_daily_quota', return_value=False), \
+                    patch('src.api.parse.reserve_user_credit', return_value=True) as reserve, \
                     patch('src.api.parse.refund_user_credit') as refund, \
                     patch('src.api.parse.record_request') as record, \
                     patch('src.api.parse.ParserFactory.create_parser', side_effect=[fake_parser('cookie'), fake_parser()]), \
@@ -380,7 +381,8 @@ class RetryIntegrationTest(unittest.TestCase):
 
     def test_failure_refunds_credit_and_logs_only_once(self):
         with self.app.test_request_context('/api/v1/parse'):
-            with patch('src.api.parse.reserve_user_credit', return_value=True) as reserve, \
+            with patch('src.api.parse.consume_daily_quota', return_value=False), \
+                    patch('src.api.parse.reserve_user_credit', return_value=True) as reserve, \
                     patch('src.api.parse.refund_user_credit') as refund, \
                     patch('src.api.parse.record_request') as record, \
                     patch('src.api.parse.ParserFactory.create_parser', side_effect=[fake_parser('cookie') for _ in range(4)]), \
@@ -441,3 +443,27 @@ class RetryIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json['error_code'], 'KUAISHOU_COOKIE_REQUIRED')
         self.assertEqual(factory.call_count, 3)
+
+    def test_universal_decoders(self):
+        start = time.time()
+        # 1. 巨量 IP (Juliang)
+        p1 = ProxyManager.decode({'code': 200, 'data': {'proxy_list': [{'ip': '1.2.3.4', 'port': 8080, 'ip_remain': 120}]}}, start)
+        self.assertEqual(p1.address, '1.2.3.4:8080')
+        self.assertAlmostEqual(p1.expires_at - start, 120, delta=1)
+
+        # 2. 芝麻代理 (Zhima)
+        p2 = ProxyManager.decode({'code': 0, 'data': [{'ip': '5.6.7.8', 'port': 9090, 'expire_time': '2026-09-30 20:00:00'}]}, start)
+        self.assertEqual(p2.address, '5.6.7.8:9090')
+
+        # 3. 青果网络 (Qingguo)
+        p3 = ProxyManager.decode({'code': 'SUCCESS', 'data': [{'ip': '9.10.11.12', 'port': 7070, 'ttl': 300}]}, start)
+        self.assertEqual(p3.address, '9.10.11.12:7070')
+
+        # 4. Data5U / 无忧代理
+        p4 = ProxyManager.decode({'success': True, 'data': [{'ip': '13.14.15.16', 'port': 6060}]}, start)
+        self.assertEqual(p4.address, '13.14.15.16:6060')
+
+        # 5. 纯文本 TXT
+        p5 = ProxyManager.decode("17.18.19.20:5050\n1.1.1.1:80", start)
+        self.assertEqual(p5.address, '17.18.19.20:5050')
+

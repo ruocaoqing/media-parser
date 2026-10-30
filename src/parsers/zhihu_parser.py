@@ -1,6 +1,7 @@
 from src.parser_factory import register_parser
 """知乎问答、文章、视频与 Pin 解析器。"""
 
+import json
 import re
 from urllib.parse import urlparse
 
@@ -9,6 +10,7 @@ from bs4 import BeautifulSoup
 from configs.general_constants import USER_AGENT_M
 from configs.logging_config import get_logger
 from src.parsers.base_parser import BaseParser
+from src.utils.cookie_manager import get_platform_cookie
 
 
 logger = get_logger(__name__)
@@ -23,6 +25,9 @@ class ZhihuParser(BaseParser):
     def __init__(self, real_url):
         super().__init__(real_url)
         self.headers = {"User-Agent": USER_AGENT_M[0], "Referer": "https://www.zhihu.com/"}
+        cookie = get_platform_cookie("zhihu")
+        if cookie:
+            self.headers["Cookie"] = cookie
         self.content_type, self.content_id = self._extract_content_id()
         self.data = self._fetch_data()
 
@@ -33,7 +38,7 @@ class ZhihuParser(BaseParser):
             ("answer", r"/answer/(\d+)"),
             ("zvideo", r"/zvideo/(\d+)"),
             ("pin", r"/pin/(\d+)"),
-            ("article", r"(?:zhuanlan\.zhihu\.com/p/|/article/)(\d+)"),
+            ("article", r"(?:(?:zhuanlan\.)?zhihu\.com/p/|/p/|/article/)(\d+)"),
         )
         for content_type, pattern in patterns:
             match = re.search(pattern, self.real_url if content_type == "article" else path)
@@ -60,9 +65,54 @@ class ZhihuParser(BaseParser):
                 timeout=15,
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if isinstance(data, dict) and not data.get("error"):
+                return data
+            logger.warning("Zhihu API returned error: %s", data)
         except Exception as exc:
             logger.warning("Zhihu API fetch failed: %s", exc)
+
+        return self._fetch_from_html()
+
+    def _fetch_from_html(self):
+        try:
+            resp = self.session.get(self.real_url, headers=self.headers, timeout=10)
+            if resp.status_code != 200 or not resp.text:
+                return {}
+            html = resp.text
+            match = re.search(r'<script id="js-initialData"[^>]*>(.*?)</script>', html, re.DOTALL)
+            if match:
+                try:
+                    state = json.loads(match.group(1)).get("initialState", {})
+                    entities = state.get("entities", {})
+                    mapping = {
+                        "article": "articles",
+                        "answer": "answers",
+                        "zvideo": "zvideos",
+                    }
+                    target_key = mapping.get(self.content_type)
+                    if target_key and self.content_id in entities.get(target_key, {}):
+                        return entities[target_key][self.content_id]
+                except Exception as e:
+                    logger.debug("Failed to parse Zhihu SSR state: %s", e)
+
+            soup = BeautifulSoup(html, "html.parser")
+            data = {}
+            og_title = soup.find("meta", property="og:title")
+            if og_title and og_title.get("content"):
+                data["title"] = og_title["content"]
+            og_image = soup.find("meta", property="og:image")
+            if og_image and og_image.get("content"):
+                data["title_image"] = og_image["content"]
+            og_desc = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
+            if og_desc and og_desc.get("content"):
+                data["excerpt"] = og_desc["content"]
+            content_div = soup.find("div", class_=re.compile(r"Post-RichText|RichText"))
+            if content_div:
+                data["content"] = str(content_div)
+            return data
+        except Exception as exc:
+            logger.debug("Zhihu HTML fallback failed: %s", exc)
             return {}
 
     @staticmethod
@@ -137,13 +187,33 @@ class ZhihuParser(BaseParser):
         pin_video = self._pin_video()
         return (
             self._first_url(pin_video.get("thumbnail"))
+            or self._first_url(pin_video.get("cover_url"))
+            or self._first_url(self.data.get("title_image"))
+            or self._first_url(self.data.get("title_img"))
+            or self._first_url(self.data.get("titleImage"))
+            or self._first_url(self.data.get("cover_url"))
+            or self._first_url(self.data.get("cover"))
             or self._first_url(self.data.get("thumbnail"))
             or self._first_url(self.data.get("image_url"))
+            or self._first_url(self.data.get("imageUrl"))
             or self._first_url(self.get_image_list())
         )
 
     def get_image_list(self):
         images = []
+        cover = (
+            self._first_url(self.data.get("title_image"))
+            or self._first_url(self.data.get("title_img"))
+            or self._first_url(self.data.get("titleImage"))
+            or self._first_url(self.data.get("cover_url"))
+            or self._first_url(self.data.get("cover"))
+            or self._first_url(self.data.get("thumbnail"))
+            or self._first_url(self.data.get("image_url"))
+            or self._first_url(self.data.get("imageUrl"))
+        )
+        if cover:
+            images.append(cover)
+
         for item in self.data.get("content") or []:
             if isinstance(item, dict) and item.get("type") == "image":
                 if url := self._first_url(item.get("url") or item.get("image")):
@@ -159,7 +229,7 @@ class ZhihuParser(BaseParser):
     def get_author_info(self):
         author = self.data.get("author") or {}
         return {
-            "nickname": author.get("name") or "",
-            "author_id": str(author.get("id") or ""),
-            "avatar": author.get("avatar_url") or "",
+            "nickname": author.get("name") or author.get("nickname") or "",
+            "author_id": str(author.get("id") or author.get("url_token") or author.get("urlToken") or ""),
+            "avatar": author.get("avatar_url") or author.get("avatarUrl") or "",
         }

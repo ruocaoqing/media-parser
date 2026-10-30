@@ -18,16 +18,40 @@ class JianyingParserTest(unittest.TestCase):
             "music_info": {"play_url": "https://audio.example.com/music.mp3"},
             "images": ["https://image.example.com/one.jpg"],
         }]}}
-        with patch("requests.Session.post", return_value=response) as post:
+        range_resp = Mock()
+        range_resp.content = b"header...vid:v028c2testvid12345...footer"
+        head_resp = Mock()
+        head_resp.status_code = 302
+        head_resp.headers = {"Location": "https://clean.example.com/clean.mp4"}
+
+        with patch("requests.Session.post", return_value=response) as post, \
+             patch("requests.Session.get", return_value=range_resp), \
+             patch("requests.Session.head", return_value=head_resp):
             parser = JianyingParser(self.URL)
 
-        self.assertEqual(parser.get_real_video_url(), "https://video.example.com/template.mp4")
+        self.assertEqual(parser.get_real_video_url(), "https://clean.example.com/clean.mp4")
         self.assertEqual(parser.get_cover_photo_url(), "https://image.example.com/cover.jpg")
         self.assertEqual(parser.get_title_content(), "测试剪映模板")
         self.assertEqual(parser.get_author_info()["author_id"], "42")
         self.assertEqual(parser.get_audio_url(), "https://audio.example.com/music.mp3")
-        self.assertEqual(parser.get_video_list(), ["https://video.example.com/template.mp4"])
+        self.assertEqual(parser.get_video_list(), ["https://clean.example.com/clean.mp4"])
         self.assertEqual(post.call_args.kwargs["json"]["id"], ["123456"])
+
+    def test_unwatermarked_resolution_fallback(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": {"templates": [{
+            "title": "测试降级模板",
+            "video_url": "https://video.example.com/preview_only.mp4",
+        }]}}
+        range_resp = Mock()
+        range_resp.content = b"no_vid_here"
+
+        with patch("requests.Session.post", return_value=response), \
+             patch("requests.Session.get", return_value=range_resp):
+            parser = JianyingParser(self.URL)
+
+        self.assertEqual(parser.get_real_video_url(), "https://video.example.com/preview_only.mp4")
 
     def test_invalid_link_does_not_call_api(self):
         with patch("requests.Session.post") as post:

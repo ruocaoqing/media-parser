@@ -18,3 +18,17 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# 本地数据与敏感文件,严禁打进镜像
+data/
+logs/
+downloads/
+报告/
+测试集/
+scripts/
+.claude/
+.agents/
+skills-lock.json
+*.db
+*.sqlite*
+dist/

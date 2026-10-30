@@ -32,13 +32,92 @@ class XianyuParserTest(unittest.TestCase):
         page_resp.raise_for_status.return_value = None
         page_resp.text = "<html><body>闲鱼商品页</body></html>"
 
+        mtop_init_resp = Mock()
+        mtop_init_resp.raise_for_status.return_value = None
+
+        mtop_info_resp = Mock()
+        mtop_info_resp.raise_for_status.return_value = None
+        mtop_info_resp.json.return_value = {
+            "ret": ["SUCCESS::接口调用成功"],
+            "data": {
+                "title": "测试闲鱼商品标题",
+                "description": "商品详细描述",
+                "reservePrice": "99.0",
+                "imageInfos": [
+                    {"url": "http://img.alicdn.com/bao/uploaded/i1/test1.png"},
+                    {"url": "http://img.alicdn.com/bao/uploaded/i2/test2.png"}
+                ],
+            },
+        }
+
+        mtop_awesome_resp = Mock()
+        mtop_awesome_resp.raise_for_status.return_value = None
+        mtop_awesome_resp.json.return_value = {
+            "ret": ["SUCCESS::接口调用成功"],
+            "data": {
+                "sellerDO": {
+                    "nick": "卖家小明",
+                },
+            },
+        }
+
+        def side_effect(url, *args, **kwargs):
+            if "mtop" in url:
+                params = kwargs.get("params", {})
+                if params.get("sign") == "dummy":
+                    return mtop_init_resp
+                if "item.info" in url:
+                    return mtop_info_resp
+                if "awesome.detail" in url:
+                    return mtop_awesome_resp
+            return page_resp
+
         url = "https://www.goofish.com/item?itemId=834469366646"
-        with patch("requests.Session.get", return_value=page_resp):
+        with patch("requests.Session.get", side_effect=side_effect):
             parser = XianyuParser(url)
 
-        self.assertEqual(parser.get_title_content(), "闲鱼商品 (商品ID: 834469366646)")
-        self.assertEqual(parser.get_image_list(), ["https://www.goofish.com/item?itemId=834469366646"])
-        self.assertEqual(parser.get_cover_photo_url(), "https://www.goofish.com/item?itemId=834469366646")
+        self.assertEqual(parser.get_title_content(), "测试闲鱼商品标题")
+        self.assertEqual(parser.get_description(), "商品详细描述")
+        self.assertEqual(parser.get_author_info(), "卖家小明")
+        self.assertEqual(parser.get_cover_photo_url(), "https://img.alicdn.com/bao/uploaded/i1/test1.png")
+        self.assertEqual(
+            parser.get_image_list(),
+            [
+                "https://img.alicdn.com/bao/uploaded/i1/test1.png",
+                "https://img.alicdn.com/bao/uploaded/i2/test2.png",
+            ],
+        )
+
+    def test_deleted_item_handles_terminal_detail(self):
+        page_resp = Mock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.text = "<html><body>闲鱼商品页</body></html>"
+
+        mtop_init_resp = Mock()
+        mtop_init_resp.raise_for_status.return_value = None
+
+        mtop_data_resp = Mock()
+        mtop_data_resp.raise_for_status.return_value = None
+        mtop_data_resp.json.return_value = {
+            "ret": ["FAIL_BIZ_ITEM_QUERY_FAILED::查询商品信息失败"],
+            "data": {},
+        }
+
+        def side_effect(url, *args, **kwargs):
+            if "mtop" in url:
+                params = kwargs.get("params", {})
+                if params.get("sign") == "dummy":
+                    return mtop_init_resp
+                return mtop_data_resp
+            return page_resp
+
+        url = "https://www.goofish.com/item?itemId=999999999999"
+        with patch("requests.Session.get", side_effect=side_effect):
+            parser = XianyuParser(url)
+
+        self.assertEqual(parser.get_image_list(), [])
+        self.assertIsNotNone(parser.get_terminal_detail())
+        self.assertEqual(parser.get_terminal_detail().get("error_code"), "ITEM_NOT_FOUND")
 
     def test_invalid_url_handles_gracefully(self):
         parser = XianyuParser("https://e.tb.cn/invalid")

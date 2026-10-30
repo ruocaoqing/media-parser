@@ -11,12 +11,13 @@
 | 平台名称 | 环境变量 Key | 别名支持 | 必要性 / 使用场景 | 推荐精简字段 |
 | :--- | :--- | :--- | :--- | :--- |
 | **小红书** | `XHS_COOKIE` | `XIAOHONGSHU_COOKIE` | 🟡 **可选 (防风控)**：日常免 Cookie 解析；机房 IP 遭遇 302 登录拦截时配置 | `a1=xxx; webId=xxx; web_session=xxx;` |
-| **微信视频号** | `YUANBAO_COOKIE` | `WECHAT_CHANNELS_COOKIE` | 🔐 **必需 (媒体流)**：提取视频号无水印视频流与图集（依赖腾讯元宝接口） | `hy_user=xxx; hy_token=xxx;` |
+| **微信视频号** | `YUANBAO_COOKIE` | `WECHAT_CHANNELS_COOKIE` | 🔐 **必需 (媒体流与标题)**：提取视频号无水印视频直链、视频标题与高清图集（微信官方加强了匿名 `generalToken` 鉴权，匿名模式下视频直链与标题为空，必须依赖元宝 Cookie） | `hy_user=xxx; hy_token=xxx;` |
 | **快手** | `KUAISHOU_COOKIE` | `KS_COOKIE` | 🟡 **可选 (防风控)**：日常免 Cookie 解析；触发 `result: 2` 反爬时配置 | `kpf=PC_WEB; kpn=KUAISHOU_VISION; did=xxx;` |
 | **拼多多** | `PINDUODUO_COOKIE` | `PDD_COOKIE` | 🟡 **部分依赖**：商品图集免 Cookie；多多视频短视频流解析需要 | `PDDAccessToken=xxx;` |
 | **豆包 AI** | `DOUBAO_COOKIE` | - | 🟡 **可选 (无水印)**：公开图文免 Cookie；提取 1080P 无水印视频需要 | `sessionid_ss=xxx;` |
 | **即梦 AI** | `JIMENG_COOKIE` | - | 🟡 **可选 (扩展鉴权)**：公开分享免 Cookie；私有草稿/活动页鉴权需要 | `sessionid=xxx;` |
 | **微博** | `WEIBO_COOKIE` | - | 🟡 **可选 (防访客限制)**：常规公开博文免 Cookie；机房 IP 遭遇访客拦截或解析粉丝可见内容时配置 | `SUB=xxx;` |
+| **知乎** | `ZHIHU_COOKIE` | - | 🟡 **可选 (防风控/专栏文章)**：常规公开内容免 Cookie；机房 IP 遭遇 40362 风控或提取登录可见专栏文章时配置 | `d_c0=xxx; z_c0=xxx;` |
 | **抖音** | `DOUYIN_COOKIE` | `DY_COOKIE` | 🟢 **常规免配 (100% 免配)**：常规短视频/普通图文/音乐无需任何凭据；<br/>🟡 **实况图 (机房 IP)**：需完整登录 Cookie + `UIFID`；<br/>🟡 **放映厅长片**：需滑块通行证 `s_v_web_id` | 实况图需: `UIFID=xxx; sessionid=xxx; sessionid_ss=xxx; passport_csrf_token=xxx; odin_tt=xxx;`<br/>(即完整登录 Cookie 拼入 UIFID)；<br/>放映厅需: `s_v_web_id=verify_xxx;` |
 
 ---
@@ -27,20 +28,30 @@
 
 ```mermaid
 flowchart TD
-    A["解析器启动"] --> B{"1. 读取环境变量 (.env / 宿主机)"}
-    B -->|"存在有效值"| Pass["应用该凭据"]
-    B -->|"不存在"| C{"2. 读取 configs/business_config.json"}
+    A["解析请求触发"] --> B{"1. 读取后台系统设置 (SQLite / /admin/settings)"}
+    B -->|"存在有效值"| Pass["应用该凭据 (支持热更新)"]
+    B -->|"为空/未配置"| C{"2. 读取 .env 环境变量 / 宿主机"}
     C -->|"存在有效值"| Pass
-    C -->|"不存在"| D["执行默认匿名 / 游客协议提取"]
+    C -->|"为空/未配置"| D{"3. 读取平台别名环境变量"}
+    D -->|"存在有效值"| Pass
+    D -->|"不存在"| E["执行默认匿名 / 游客协议提取"]
 ```
 
-### 方式 A：通过 `.env` 环境变量配置（推荐，最安全便捷）
+### 方式 A：管理员后台在线配置（推荐，即时生效无需重启）
+登录系统管理员后台，导航至 **系统设置 (`/admin/settings`)** -> **平台凭据 (Cookie)** Tab 选项卡：
+* 支持可视化配置各平台的 Cookie 凭据（如微信视频号 `cookie_wechat_channels`、小红书 `cookie_xiaohongshu` 等）；
+* 此处配置具有**最高优先级**，可覆盖 `.env` 中的初始环境变量；
+* 修改并点击保存后**立即生效，无需重启应用容器/进程**；清空框内内容并保存即可自动恢复回退读取 `.env` 配置。
+
+### 方式 B：通过 `.env` 环境变量配置
 在项目根目录创建或编辑 `.env` 文件（参考 [.env.example](file:///Users/leo/Projects/media-parser/.env.example)）：
 ```env
-# 小红书
-XHS_COOKIE="a1=xxx; webId=yyy;"
+# 微信视频号 / 腾讯元宝
+YUANBAO_COOKIE="hy_user=xxx; hy_token=xxx;"
 
-# 腾讯元宝（用于视频号解析）
+# 小红书
+XHS_COOKIE="a1=xxx; webId=xxx; web_session=xxx;"
+```
 YUANBAO_COOKIE="hy_user=xxx; hy_token=yyy;"
 
 # 快手
@@ -200,6 +211,14 @@ docker compose up -d
    ```
 3. 填入 `.env` 中的 `WEIBO_COOKIE`（用于解决机房 IP 访客限制或提取粉丝可见博文/高码率视频）。
 
+### 3.8 知乎 (`ZHIHU_COOKIE`)
+1. 访问 [知乎网页版 (zhihu.com)](https://www.zhihu.com/) 并登录账号。
+2. 按 `F12` 打开开发者工具，在 **Application -> Cookies -> https://www.zhihu.com** 中提取：
+   ```text
+   d_c0=你的d_c0值; z_c0=你的z_c0值;
+   ```
+3. 填入后台「系统设置」→「平台 Cookie 凭据覆盖配置」或 `.env` 中的 `ZHIHU_COOKIE`（用于解决机房云服务器 IP 遭遇的 40362 风控拦截或提取登录可见专栏文章）。
+
 ---
 
 ## 4. 常见错误码与排查指引
@@ -226,3 +245,20 @@ docker compose up -d
    - 生产环境推荐通过容器编排环境变量或密钥管理服务注入。
 3. **Cookie 定期轮换**：
    - 大部分平台的 Web 登录态有效期在 30~90 天之间；遇到对应平台的 `*_COOKIE_REQUIRED` 报错时，及时在 `.env` 中更新并重启服务即可。
+
+
+### 巡检测试样例与结果
+
+默认探针链接统一来自 `tests/live_parser_samples.json`，仅选择带 `cookie_probe`
+元数据的样例；`platform_key` 对应凭据注册表键，`capability` 描述待验证能力。
+每组凭据只标记一条默认样例，元宝凭据使用视频号内容，拼多多使用多多视频，
+抖音使用实况图文。新增或更换默认样例时在样本库维护，不在 Python 中另写链接。
+部署时需保留此 JSON；文件缺失或没有默认样例时，后台会提示手动填写链接。
+后台自定义链接优先，清空后恢复样本库默认链接，并要求重新验证。
+
+探针对同一链接分别带当前凭据、禁用凭据解析。出现媒体访问或实况数量等增益时
+显示“有效”；两路均成功但未观察到增益时显示“待验证”，不能据此证明 Cookie 有效。
+原画清晰度、水印差异暂不自动判定。仅返回封面不算媒体解析成功。
+两路均失败显示“探针失败”，需检查作品是否删除、链接或网络是否异常。
+“无 Cookie”仅隔离当前执行上下文的用户配置凭据，不影响其他并发解析；
+解析器自身的访客会话和免登录兜底仍按原逻辑运行。
