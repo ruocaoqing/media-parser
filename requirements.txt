@@ -12,3 +12,7 @@ mini-racer==0.12.4
 pycryptodome==3.20.0
 python-dotenv==1.2.2
 
+# 创作工具（图片处理）
+Pillow==12.2.0
+qrcode==8.2
+

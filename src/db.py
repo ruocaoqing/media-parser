@@ -137,6 +137,23 @@ CREATE TABLE IF NOT EXISTS ext_pairings (
     expires_at  TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_openid ON users(openid) WHERE openid IS NOT NULL;
+CREATE TABLE IF NOT EXISTS media_tool_jobs (
+    id            TEXT PRIMARY KEY,
+    user_id       INTEGER,
+    tool_type     TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    progress      INTEGER NOT NULL DEFAULT 0,
+    stage         TEXT,
+    input_json    TEXT NOT NULL,
+    result_json   TEXT,
+    error_code    TEXT,
+    error_message TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_tool_jobs_user ON media_tool_jobs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_tool_jobs_created ON media_tool_jobs(created_at DESC);
 """
 
 

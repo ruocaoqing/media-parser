@@ -232,6 +232,33 @@ curl 'http://localhost:8051/api/v1/parse' \
 
 ---
 
+### 3. 创作工具（图片处理）
+
+小程序「创作」tab 的服务端工具统一走异步任务：
+
+```bash
+# 1) 上传图片（multipart，字段名 file）
+curl 'http://localhost:8051/api/v1/media-tools/uploads' \
+  -H 'X-WX-Token: <登录令牌>' \
+  -F 'file=@photo.jpg'
+
+# 2) 创建任务
+curl 'http://localhost:8051/api/v1/media-tools/jobs' \
+  -H 'X-WX-Token: <登录令牌>' \
+  -H 'Content-Type: application/json' \
+  -d '{"toolType":"image_compress","sourceFiles":["<fileId>"],"options":{"quality":"standard"}}'
+
+# 3) 轮询结果
+curl 'http://localhost:8051/api/v1/media-tools/jobs/<jobId>' \
+  -H 'X-WX-Token: <登录令牌>'
+```
+
+支持的 `toolType`：`image_batch_ratio`、`image_long_stitch`、`image_round_corners`、`image_compress`、`image_convert`、`image_pad`、`image_resize`、`image_to_pdf`、`image_to_gif`、`image_qr_code`。其余本地工具（拼图、九宫格、旋转、翻转、加水印、裁剪）由小程序 canvas 直接完成。
+
+任务结果文件通过 `/api/v1/media-tools/files/...` 提供，保留 24 小时；创建任务时会自动清理过期任务与临时上传。服务端工具每次消耗 1 次额度，失败自动退款。
+
+---
+
 ## 🧪 自动化测试与健康自检
 
 本项目拥有完备的双层测试体系（Mock 单元测试 + 基于 [`tests/live_parser_samples.json`](tests/live_parser_samples.json) 的 300+ 条真实在线样本库回归）。遇到解析异常或日常部署验证时，可一键运行 50 平台健康自检：
