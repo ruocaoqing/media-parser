@@ -6,7 +6,9 @@ import time
 
 from flask import current_app, has_app_context, request
 
-from src.db import daily_quota_cap, get_db, setting, transaction, utcnow
+from datetime import datetime, timedelta, timezone
+
+from src.db import daily_quota_cap, get_db, parse_utc, setting, transaction, utcnow
 
 
 class SQLiteRateLimiter:
@@ -61,6 +63,10 @@ class SQLiteRateLimiter:
 
 
 rate_limiter = SQLiteRateLimiter()
+
+# 登录会话的服务端硬上限。旧库里可能仍有 30 天会话，鉴权时按签发时间再截短一次，
+# 避免只改签发默认值后旧令牌继续长期可用。
+WX_SESSION_TTL = timedelta(hours=24)
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
@@ -131,13 +137,21 @@ def authenticate_wx_token(enforce_rate_limit=True):
 
     db = get_db()
     row = db.execute(
-        "SELECT s.token_hash, s.expires_at AS session_expires_at, u.* "
+        "SELECT s.token_hash, s.created_at AS session_created_at, "
+        "s.expires_at AS session_expires_at, u.* "
         "FROM wx_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?",
         (hashlib.sha256(token.encode("utf-8")).hexdigest(),),
     ).fetchone()
     if row is None:
         return None, (401, "登录状态无效，请重新登录", "WX_TOKEN_INVALID")
-    if str(row["session_expires_at"]) <= utcnow():
+    effective_expires_at = parse_utc(row["session_expires_at"])
+    created_at = parse_utc(row["session_created_at"])
+    if created_at is not None:
+        effective_expires_at = min(
+            effective_expires_at,
+            created_at + WX_SESSION_TTL,
+        )
+    if effective_expires_at is None or effective_expires_at <= datetime.now(timezone.utc):
         return None, (401, "登录状态已过期，请重新登录", "WX_TOKEN_EXPIRED")
     # 三道检查（§2.5）：停用必须查
     if not row["active"]:

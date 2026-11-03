@@ -2,9 +2,10 @@ import base64
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from app import create_app
-from src.db import get_db, init_db
+from src.db import get_db, init_db, parse_utc
 
 
 class WxMigrationTest(unittest.TestCase):
@@ -613,6 +614,11 @@ class WxMeTest(unittest.TestCase):
         self.assertEqual(user["id"], self.session["user"]["id"])
         self.assertEqual(user["remaining_today"], 10)
 
+    def test_login_expires_after_one_day(self):
+        expires = parse_utc(self.session["expires_at"])
+        self.assertLessEqual(expires, datetime.now(timezone.utc) + timedelta(hours=24))
+        self.assertGreater(expires, datetime.now(timezone.utc) + timedelta(hours=23))
+
     def test_me_reflects_a_member_card(self):
         with self.app.app_context():
             open_member_card(self.session["user"]["id"], "year")
@@ -639,6 +645,21 @@ class WxMeTest(unittest.TestCase):
         with self.app.app_context():
             db = get_db()
             db.execute("UPDATE wx_sessions SET expires_at=?", ("2020-01-01T00:00:00+00:00",))
+            db.commit()
+        response = self.client.get("/api/v1/wx/me", headers=auth_header(self.session["token"]))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error_code"], "WX_TOKEN_EXPIRED")
+
+    def test_thirty_day_session_created_before_the_one_day_limit_is_expired(self):
+        with self.app.app_context():
+            db = get_db()
+            db.execute(
+                "UPDATE wx_sessions SET created_at=?, expires_at=?",
+                (
+                    (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds"),
+                    (datetime.now(timezone.utc) + timedelta(days=29)).isoformat(timespec="seconds"),
+                ),
+            )
             db.commit()
         response = self.client.get("/api/v1/wx/me", headers=auth_header(self.session["token"]))
         self.assertEqual(response.status_code, 401)
@@ -2089,6 +2110,19 @@ class WxPairingTest(unittest.TestCase):
         self.assertEqual(ext["session_key"], "", "插件会话没有 session_key，存空串")
         self.assertNotEqual(ext["token_hash"], hashlib.sha256(self.token.encode()).hexdigest(),
                             "必须是独立令牌，不能复用小程序自己的那枚")
+
+    def test_confirm_session_expires_after_one_day(self):
+        code = self.start()[0].get_json()["data"]["pairing_code"]
+        self.confirm(code)
+
+        with self.app.app_context():
+            rows = get_db().execute(
+                "SELECT * FROM wx_sessions ORDER BY created_at").fetchall()
+        ext = [row for row in rows if row["token_hash"] != hashlib.sha256(
+            self.token.encode()).hexdigest()][0]
+        expires = parse_utc(ext["expires_at"])
+        self.assertLessEqual(expires, datetime.now(timezone.utc) + timedelta(hours=24))
+        self.assertGreater(expires, datetime.now(timezone.utc) + timedelta(hours=23))
 
     def test_confirm_twice_is_409(self):
         code = self.start()[0].get_json()["data"]["pairing_code"]

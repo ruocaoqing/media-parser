@@ -35,7 +35,7 @@ bp = Blueprint('wx', __name__)
 logger = get_logger(__name__)
 
 CODE2SESSION_URL = 'https://api.weixin.qq.com/sns/jscode2session'
-TOKEN_TTL_DAYS = 30
+TOKEN_TTL_HOURS = 24
 AVATAR_MAX_BYTES = 2 * 1024 * 1024
 LOGIN_RATE_LIMIT = 10
 # 不可登录的占位 hash：username 是 NOT NULL，但小程序用户永远不走密码登录
@@ -169,7 +169,7 @@ def login():
             return make_response(403, '账号已被停用，请联系客服', None, False, 'ACCOUNT_DISABLED'), 403
 
         raw_token = secrets.token_urlsafe(32)
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=TOKEN_TTL_DAYS)).isoformat(timespec='seconds')
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)).isoformat(timespec='seconds')
         db.execute(
             "INSERT INTO wx_sessions(token_hash,user_id,session_key,created_at,expires_at,last_seen_at) "
             "VALUES(?,?,?,?,?,?)",
@@ -321,7 +321,7 @@ def member_plans():
 #                        <-- pending --
 #                          用户扫码打开 pairing 页（scene 携带配对码）
 #                          -- POST /pair/confirm + X-WX-Token -->
-#                        铸一枚**独立**的 30 天会话写进 wx_sessions
+#                        铸一枚**独立**的 24 小时会话写进 wx_sessions
 #                          <-- confirmed --
 #   -- GET /pair/status -->
 #                        <-- confirmed + token（只发这一次）--
@@ -476,7 +476,7 @@ def pair_confirm():
             return make_response(409, '该配对码已被使用，请在插件上重新发起', None, False, 'PAIRING_ALREADY_CONFIRMED'), 409
 
         raw_token = secrets.token_urlsafe(32)
-        token_expires_at = (datetime.now(timezone.utc) + timedelta(days=TOKEN_TTL_DAYS)).isoformat(timespec='seconds')
+        token_expires_at = (datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)).isoformat(timespec='seconds')
         # 插件会话没有 session_key（那东西来自 wx.login 的 code，插件拿不到），
         # 存空串：加密函数对空串恒等往返（tests 里已钉死），列又是 NOT NULL。
         db.execute(
