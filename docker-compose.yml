@@ -32,6 +32,7 @@ services:
       # 宿主机 .env 里的值就进不来，wx_configured() 恒为 False，登录永远 503。
       - WX_APPID=${WX_APPID:-}
       - WX_APPSECRET=${WX_APPSECRET:-}
+      - FEEDBACK_WEBHOOK_URL=${FEEDBACK_WEBHOOK_URL:-}
       # 插件扫码登录的小程序码版本：默认 trial（小程序还没发正式版，release 的码扫不开）。
       # 发布正式版后改回 release（或直接删掉这行用代码默认值）。
       - WX_QR_ENV_VERSION=${WX_QR_ENV_VERSION:-trial}

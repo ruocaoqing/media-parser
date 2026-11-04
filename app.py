@@ -7,6 +7,7 @@ from flask_cors import CORS
 from src.api.parse import bp as api_bp
 from src.api.wx import bp as wx_bp
 from src.api.media_tools import bp as media_tools_bp
+from src.api.feedback import bp as feedback_bp
 from src.web.views import bp as web_bp
 from src.auth import bp as auth_bp, register_template_helpers
 from src.web.portal import bp as portal_bp
@@ -97,6 +98,7 @@ def create_app(config=None):
     app.register_blueprint(wx_bp, url_prefix='/api')
     # 创作工具是纯 API，网页管理端关闭（API_ONLY）时也应照常可用
     app.register_blueprint(media_tools_bp, url_prefix='/api')
+    app.register_blueprint(feedback_bp, url_prefix='/api')
     if not app.config.get('API_ONLY'):
         register_template_helpers(app)
         app.register_blueprint(web_bp)
