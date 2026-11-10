@@ -1,4 +1,5 @@
 import os
+import re
 
 import requests
 from flask import Blueprint, request
@@ -15,6 +16,12 @@ FEEDBACK_TYPES = {
     "other": "其他问题",
 }
 
+EMAIL_PATTERN = re.compile(
+    r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*",
+    re.IGNORECASE | re.ASCII,
+)
+
 
 @bp.post("/v1/feedback")
 def submit_feedback():
@@ -30,16 +37,24 @@ def submit_feedback():
     if type_key not in FEEDBACK_TYPES or not description or len(description) > 300:
         return make_response(400, "请选择问题类型，并填写 1–300 字的问题描述", None, False, "INVALID_FEEDBACK"), 400
 
+    raw_email = data.get("contactEmail", "")
+    contact_email = raw_email.strip() if isinstance(raw_email, str) else None
+    if contact_email is None or (contact_email and (len(contact_email) > 254 or not EMAIL_PATTERN.fullmatch(contact_email))):
+        return make_response(400, "请输入有效的联系邮箱", None, False, "INVALID_FEEDBACK_EMAIL"), 400
+
     client_id = str(data.get("clientId") or "").strip()[:80]
     version = str(data.get("version") or "").strip()[:40]
-    content = "\n".join([
+    lines = [
         "【硬核去水印王 · 意见反馈】",
         "来源：浏览器插件",
         f"问题类型：{FEEDBACK_TYPES[type_key]}",
         f"问题描述：{description}",
         f"客户端 ID：{client_id or '未提供'}",
         f"客户端版本：v{version or '未知'}",
-    ])
+    ]
+    if contact_email:
+        lines.append(f"联系邮箱：{contact_email}")
+    content = "\n".join(lines)
     try:
         response = requests.post(
             webhook_url,
