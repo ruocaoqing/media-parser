@@ -196,6 +196,15 @@ def _auth_or_error():
     return access, None
 
 
+@bp.get('/v1/wx/creation-config')
+def creation_config():
+    response = make_response(200, '成功', {
+        'local_images_enabled': setting('wx_creation_local_images_enabled', '0') == '1',
+    }, True)
+    response.cache_control.no_store = True
+    return response
+
+
 @bp.get('/v1/wx/me')
 def me():
     access, failure = _auth_or_error()

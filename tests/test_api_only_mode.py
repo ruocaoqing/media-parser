@@ -50,6 +50,11 @@ class ApiOnlyModeTest(unittest.TestCase):
         res_login = self.client.get("/auth/login")
         self.assertEqual(res_login.status_code, 404)
 
+    def test_creation_config_is_available_in_api_only_mode(self):
+        response = self.client.get("/api/v1/wx/creation-config")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["data"], {"local_images_enabled": False})
+
     def test_health_check_works(self):
         """测试健康检查接口正常返回 200"""
         response = self.client.get("/api/health")

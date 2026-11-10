@@ -518,6 +518,37 @@ class ManagementTest(unittest.TestCase):
         with self.app.app_context():
             self.assertEqual(get_db().execute("SELECT COUNT(*) count FROM request_logs").fetchone()["count"], 1)
 
+    def test_admin_controls_mini_program_local_images(self):
+        api = "/api/v1/wx/creation-config"
+        key = "wx_creation_local_images_enabled"
+        response = self.client.get(api)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.cache_control.no_store)
+        self.assertEqual(response.get_json()["data"], {"local_images_enabled": False})
+        self.assertEqual(self.client.post(api, json={key: True}).status_code, 405)
+        self.client.post("/admin/settings", data={"csrf_token": self.csrf(), key: "1"})
+        self.assertFalse(self.client.get(api).get_json()["data"]["local_images_enabled"])
+
+        self.client.post("/auth/setup", data={"csrf_token": self.csrf(), "username": "admin", "password": "password123", "confirm_password": "password123"})
+        self.client.post("/auth/login", data={"csrf_token": self.csrf(), "username": "admin", "password": "password123"})
+        html = self.client.get("/admin/settings").get_data(as_text=True)
+        toggle = re.search(r'<input type="checkbox" role="switch" id="wx-creation-local-images-toggle"[^>]*>', html)
+        self.assertIsNotNone(toggle)
+        self.assertNotIn("checked", toggle.group())
+        self.client.post("/admin/settings", data={key: ["0", "1"]})
+        self.assertFalse(self.client.get(api).get_json()["data"]["local_images_enabled"])
+
+        token = self.csrf()
+        headers = {"X-Requested-With": "XMLHttpRequest"}
+        enabled = self.client.post("/admin/settings", data={"csrf_token": token, key: ["0", "1"]}, headers=headers)
+        self.assertTrue(enabled.get_json()["succ"])
+        self.assertTrue(self.app.test_client().get(api).get_json()["data"]["local_images_enabled"])
+        self.client.post("/admin/settings", data={"csrf_token": token}, headers=headers)
+        self.assertTrue(self.client.get(api).get_json()["data"]["local_images_enabled"])
+        disabled = self.client.post("/admin/settings", data={"csrf_token": token, key: "0"}, headers=headers)
+        self.assertTrue(disabled.get_json()["succ"])
+        self.assertFalse(self.client.get(api).get_json()["data"]["local_images_enabled"])
+
     def test_update_api_tip_settings(self):
         # Create admin and login
         self.client.post("/auth/setup", data={"csrf_token": self.csrf(), "username": "admin", "password": "password123", "confirm_password": "password123"})

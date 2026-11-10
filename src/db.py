@@ -256,6 +256,7 @@ def init_db():
         "default_initial_credits": "100",
         "wx_free_daily_quota": str(DEFAULT_FREE_DAILY_QUOTA),
         "wx_checkin_bonus": str(DEFAULT_CHECKIN_BONUS),
+        "wx_creation_local_images_enabled": "0",
         "api_tip_enabled": "1",
         "api_tip_author": "ucmao",
         "api_tip_website": "https://github.com/ucmao/media-parser",

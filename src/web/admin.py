@@ -147,6 +147,8 @@ def update_settings():
         set_setting("default_trial_days", _non_negative_int(request.form.get("default_trial_days"), 365, 9999))
     set_setting("wx_free_daily_quota", _positive_int(request.form.get("wx_free_daily_quota"), DEFAULT_FREE_DAILY_QUOTA, 100000))
     set_setting("wx_checkin_bonus", _positive_int(request.form.get("wx_checkin_bonus"), DEFAULT_CHECKIN_BONUS, 100000))
+    if "wx_creation_local_images_enabled" in request.form:
+        set_setting("wx_creation_local_images_enabled", "1" if "1" in request.form.getlist("wx_creation_local_images_enabled") else "0")
 
     if request.form.get("chk_unlimited_credits") == "1" or request.form.get("default_initial_credits") == "-1":
         set_setting("default_initial_credits", -1)

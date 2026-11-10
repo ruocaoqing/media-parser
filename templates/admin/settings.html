@@ -261,6 +261,27 @@
                         </div>
                     </div>
                 </section>
+
+                <section class="bg-white rounded-xl border border-slate-200/80 p-5 sm:p-6 shadow-xs space-y-5">
+                    <div class="border-b border-slate-100 pb-3">
+                        <h2 class="text-sm font-bold text-slate-900">小程序创作</h2>
+                    </div>
+                    <div class="flex items-center justify-between gap-4 text-sm">
+                        <div>
+                            <label for="wx-creation-local-images-toggle" class="font-medium text-slate-900">允许从本地相册选图</label>
+                            <div id="wx-creation-local-images-description" class="text-xs text-slate-500 mt-0.5">默认关闭。开启后，使用图片的创作工具会显示「本地相册」入口；图片在设备上处理。</div>
+                        </div>
+                        <input type="hidden" name="wx_creation_local_images_enabled" value="0">
+                        <label class="switch-toggle shrink-0">
+                            <input type="checkbox" role="switch" id="wx-creation-local-images-toggle"
+                                name="wx_creation_local_images_enabled" value="1"
+                                aria-describedby="wx-creation-local-images-description"
+                                {{ 'checked' if settings.get('wx_creation_local_images_enabled') == '1' }}
+                                onchange="triggerSettingsSubmit(this)">
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                </section>
             </div>
 
             <!-- Tab 2: 平台凭据 (Cookie) -->
@@ -750,6 +771,9 @@
         }
         if (name === 'default_user_qps' || name === 'default_initial_credits' || name === 'chk_unlimited_credits' || name === 'wx_free_daily_quota' || name === 'wx_checkin_bonus') {
             return '新账号默认初始参数已更新';
+        }
+        if (name === 'wx_creation_local_images_enabled') {
+            return el.checked ? '已开启小程序本地相册入口' : '已关闭小程序本地相册入口';
         }
         if (name === 'api_tip_enabled' || el.id === 'api-tip-toggle') {
             return el.checked ? '已开启 API 响应版权提示' : '已关闭 API 响应版权提示';
